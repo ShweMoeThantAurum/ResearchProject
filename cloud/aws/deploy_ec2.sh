@@ -4,28 +4,34 @@
 # Repository: https://github.com/ShweMoeThantAurum/ResearchProject
 # ============================================================
 
+set -e  # stop on first error
+
 # === 1. Update and install dependencies ===
 echo "[Setup] Updating and installing base packages..."
 sudo apt update -y
 sudo apt install -y git python3 python3-venv python3-pip docker.io
 
-# === 2. Clone the GitHub repository ===
-echo "[Setup] Cloning AEFL Research Project repository..."
-if [ -d "ResearchProject" ]; then
-  echo "[Info] Directory already exists. Pulling latest changes..."
+# === 2. Ensure correct working directory ===
+cd ~
+if [ -d "ResearchProject/.git" ]; then
+  echo "[Info] Existing repository detected. Pulling latest changes..."
   cd ResearchProject
   git pull origin main
 else
+  echo "[Setup] Cloning AEFL Research Project repository..."
+  rm -rf ResearchProject  # cleanup any old folders
   git clone https://github.com/ShweMoeThantAurum/ResearchProject.git
   cd ResearchProject
 fi
 
-# === 3. Create and activate Python virtual environment ===
+# === 3. Create Python virtual environment ===
 echo "[Setup] Creating Python virtual environment..."
 python3 -m venv .venv
+
+# === 4. Activate environment and install dependencies ===
+echo "[Setup] Activating virtual environment..."
 source .venv/bin/activate
 
-# === 4. Install Python dependencies ===
 echo "[Setup] Installing Python dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
@@ -33,6 +39,7 @@ pip install -r requirements.txt
 # === 5. Verify installation ===
 echo "[Verify] Python version:"
 python3 --version
+
 echo "[Verify] PyTorch check:"
 python -c "import torch; print('PyTorch available:', torch.cuda.is_available())"
 
@@ -42,6 +49,7 @@ sudo systemctl enable docker
 sudo systemctl start docker
 sudo docker --version
 
+# === 7. Summary ===
 echo "============================================================"
 echo "[SUCCESS] AEFL environment is ready on this EC2 instance."
 echo "Repository path: ~/ResearchProject"
