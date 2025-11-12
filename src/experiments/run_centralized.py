@@ -1,5 +1,5 @@
 """
-Runs the centralized (non-FL) baseline.
+Runs the centralized baseline for traffic flow prediction across datasets.
 """
 
 import os
@@ -8,8 +8,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from data.dataset import WindowedArray
 from src.models.simple_gru import SimpleGRU
+from data.dataset import WindowedArray
+
 from src.utils.config import load_config
 from src.utils.seed import set_global_seed
 from src.utils.metrics import eval_loader_metrics
@@ -21,12 +22,8 @@ def run(config_path="configs/centralized_sz.yaml"):
     cfg = load_config(config_path)
     set_global_seed(cfg["experiment"]["seed"])
 
-    exp = cfg["experiment"]
-    train = cfg["training"]
-    eva = cfg["evaluation"]
-
-    PROC = exp["proc_dir"]
-    OUT = exp["output_dir"]
+    exp, train, eva = cfg["experiment"], cfg["training"], cfg["evaluation"]
+    PROC, OUT = exp["proc_dir"], exp["output_dir"]
     os.makedirs(OUT, exist_ok=True)
 
     device = (
@@ -36,32 +33,31 @@ def run(config_path="configs/centralized_sz.yaml"):
         else "cpu"
     )
 
-    # datasets
+    # Load dataset
     train_ds = WindowedArray(f"{PROC}/X_train.npy", f"{PROC}/y_train.npy")
     val_ds = WindowedArray(f"{PROC}/X_valid.npy", f"{PROC}/y_valid.npy")
     test_ds = WindowedArray(f"{PROC}/X_test.npy", f"{PROC}/y_test.npy")
 
     train_ld = DataLoader(train_ds, batch_size=train["batch_size"], shuffle=True)
-    val_ld = DataLoader(val_ds, batch_size=128)
-    test_ld = DataLoader(test_ds, batch_size=128)
+    val_ld = DataLoader(val_ds, batch_size=128, shuffle=False)
+    test_ld = DataLoader(test_ds, batch_size=128, shuffle=False)
 
-    # model
+    # Build model
     num_nodes = train_ds[0][0].shape[-1]
     model = SimpleGRU(num_nodes=num_nodes, hidden_size=train["hidden_size"]).to(device)
+
     opt = torch.optim.Adam(model.parameters(), lr=train["lr"])
     loss_fn = nn.MSELoss()
 
     csv_path = os.path.join(OUT, "round_log.csv")
     init_csv(
         csv_path,
-        ["epoch", "val_mae", "val_rmse", "secs", "cpu_percent", "mem_mb", "energy_j"],
+        ["epoch", "val_mae", "val_rmse", "secs", "cpu_percent", "mem_mb",
+         "energy_j", "bytes_sent_mb"]
     )
-
-    print(f"[Centralized] epochs={train['epochs']} | device={device}")
 
     total_energy_j = 0.0
 
-    # training loop
     for ep in range(1, train["epochs"] + 1):
         t0 = time.time()
         model.train()
@@ -73,36 +69,66 @@ def run(config_path="configs/centralized_sz.yaml"):
             loss.backward()
             opt.step()
 
-        # validation
         v_mae, v_rmse, *_ = eval_loader_metrics(model, val_ld, device)
 
         secs = time.time() - t0
         cpu_p, mem_mb = cpu_mem_snapshot()
 
-        e_j = compute_round_energy_j(secs, cpu_p, 0, "edge")
-        total_energy_j += e_j
+        energy = compute_round_energy_j(secs, cpu_p, 0, "edge")
+        total_energy_j += energy
 
         log_row(
             csv_path,
             [
-                ep,
-                f"{v_mae:.6f}",
-                f"{v_rmse:.6f}",
-                f"{secs:.3f}",
-                f"{cpu_p:.2f}",
-                f"{mem_mb:.2f}",
-                f"{e_j:.6f}",
-            ],
+                ep, f"{v_mae:.6f}", f"{v_rmse:.6f}",
+                f"{secs:.3f}", f"{cpu_p:.2f}", f"{mem_mb:.2f}",
+                f"{energy:.6f}", "0.000000"
+            ]
         )
 
-        print(f"Epoch {ep:02d} | MAE={v_mae:.4f} | RMSE={v_rmse:.4f}")
+        print(f"Epoch {ep:02d} | val_MAE={v_mae:.4f} | val_RMSE={v_rmse:.4f}")
 
-    # final test
+    # Final test evaluation
     t_mae, t_rmse, *_ = eval_loader_metrics(model, test_ld, device)
 
-    with open(os.path.join(OUT, "results.txt"), "w") as f:
+    results_path = os.path.join(OUT, "results.txt")
+    roundlog_path = csv_path
+    ckpt_path = os.path.join(OUT, f"{exp['name'].lower().replace(' ', '_')}_state.pt")
+
+    with open(results_path, "w") as f:
         f.write(f"TEST MAE: {t_mae:.6f}\n")
         f.write(f"TEST RMSE: {t_rmse:.6f}\n")
         f.write(f"TOTAL ENERGY_J: {total_energy_j:.6f}\n")
 
-    print("Centralized baseline completed.")
+    torch.save(model.state_dict(), ckpt_path)
+
+    print(f"Saved local outputs: {results_path}, {roundlog_path}, {ckpt_path}")
+
+    # ==========================================================
+    # S3 UPLOAD
+    # ==========================================================
+    import boto3
+    s3 = boto3.client("s3")
+    bucket = "aefl-results"
+    s3_prefix = f"experiments/{os.path.basename(OUT)}/"
+
+    def upload(local, key):
+        if os.path.exists(local):
+            print(f"Uploading {local} → s3://{bucket}/{key}")
+            s3.upload_file(local, bucket, key)
+        else:
+            print(f"WARNING: Missing {local}")
+
+    upload(results_path, s3_prefix + "results.txt")
+    upload(roundlog_path, s3_prefix + "round_log.csv")
+    upload(ckpt_path, s3_prefix + "model_state.pt")
+
+    print(f"S3 upload completed → s3://{bucket}/{s3_prefix}")
+
+
+if __name__ == "__main__":
+    import argparse
+    p = argparse.ArgumentParser(description="Run centralized baseline")
+    p.add_argument("--config", type=str, default="configs/centralized_sz.yaml")
+    args = p.parse_args()
+    run(args.config)
