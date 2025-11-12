@@ -1,11 +1,31 @@
 """
 Preprocesses SZ-Taxi CSVs into normalized, windowed arrays and builds client partitions.
+Automatically downloads raw files from S3 if not present locally.
 """
 
 import os
+import boto3
 import numpy as np
 from data.dataloader import build_client_datasets
 
+BUCKET = "aefl-results"
+S3_PREFIX = "raw/sz/"   # sz_speed.csv, sz_adj.csv
+
+s3 = boto3.client("s3")
+
+def download_from_s3(raw_dir):
+    """Download SZ raw files from S3 into raw_dir."""
+    os.makedirs(raw_dir, exist_ok=True)
+    files = ["sz_speed.csv", "sz_adj.csv"]
+
+    for fname in files:
+        local_path = os.path.join(raw_dir, fname)
+        if not os.path.exists(local_path):
+            print(f"Downloading {fname} from S3...")
+            s3.download_file(BUCKET, S3_PREFIX + fname, local_path)
+        else:
+            print(f"{fname} already exists locally.")
+    print("SZ raw data ready.")
 
 def preprocess_and_split(raw_dir="data/raw/sz",
                          out_dir="data/processed/sz/prepared",
@@ -14,10 +34,13 @@ def preprocess_and_split(raw_dir="data/raw/sz",
                          imbalance=0.4,
                          seed=42):
     """Converts raw SZ-Taxi data into prepared arrays and per-client splits."""
+    download_from_s3(raw_dir)
     os.makedirs(out_dir, exist_ok=True)
+
     print(f"Preprocessing SZ-Taxi data into {out_dir}...")
 
-    # build client partitions for federated simulation
+    # NOTE: SZ preprocessing is minimal in your setup — if you add normalization,
+    # do it here. For now, we just create client splits.
     build_client_datasets(
         proc_dir=out_dir,
         num_clients=num_clients,
@@ -26,7 +49,7 @@ def preprocess_and_split(raw_dir="data/raw/sz",
         seed=seed,
     )
 
-    print(f"Completed preprocessing with {'Non-IID' if noniid else 'IID'} client partitioning.")
+    print(f"Completed preprocessing with {'Non-IID' if noniid else 'IID'} partitioning.")
 
 
 if __name__ == "__main__":
@@ -40,5 +63,11 @@ if __name__ == "__main__":
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()
 
-    preprocess_and_split(args.raw_dir, args.out_dir, args.clients,
-                         args.noniid, args.imbalance, args.seed)
+    preprocess_and_split(
+        raw_dir=args.raw_dir,
+        out_dir=args.out_dir,
+        num_clients=args.clients,
+        noniid=args.noniid,
+        imbalance=args.imbalance,
+        seed=args.seed
+    )
