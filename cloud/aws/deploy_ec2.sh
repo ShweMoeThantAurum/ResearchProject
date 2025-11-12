@@ -42,11 +42,6 @@ sudo systemctl enable docker
 sudo systemctl start docker
 sudo docker --version
 
-# === 7. Optional: Test AEFL experiment run ===
-echo "[Test] Example dry run (optional)..."
-# Uncomment the line below after verifying configs
-# python src/experiments/run_aefl.py --config configs/aefl_sz.yaml
-
 echo "============================================================"
 echo "[SUCCESS] AEFL environment is ready on this EC2 instance."
 echo "Repository path: ~/ResearchProject"
