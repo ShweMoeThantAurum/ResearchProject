@@ -1,41 +1,42 @@
 FROM python:3.11-slim
 
-# ============================
-# system deps
-# ============================
+# -------------------------------------------------------------
+# System dependencies required for PyTorch + build tasks
+# -------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
-# ============================
-# Create non-root user
-# ============================
+# -------------------------------------------------------------
+# Create non-root user for safer execution
+# -------------------------------------------------------------
 RUN useradd -m aefluser
 USER aefluser
+WORKDIR /app
 
-# ============================
-# PyTorch CPU (small)
-# ============================
+# Add project to PYTHONPATH
+ENV PYTHONPATH=/app
+
+# -------------------------------------------------------------
+# Install Python dependencies
+# -------------------------------------------------------------
+COPY --chown=aefluser:aefluser requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Ensure NumPy < 2 for PyTorch ABI compatibility
+RUN pip install --no-cache-dir "numpy<2" --force-reinstall
+
+# Install CPU-only PyTorch wheels
 RUN pip install --no-cache-dir \
     torch torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/cpu
 
-# ============================
-# Project requirements
-# ============================
-COPY --chown=aefluser:aefluser requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# ============================
-# AWS IoT SDK
-# ============================
-RUN pip install --no-cache-dir awscrt awsiotsdk
-
-# ============================
-# Copy full project
-# ============================
+# -------------------------------------------------------------
+# Copy project code
+# -------------------------------------------------------------
 COPY --chown=aefluser:aefluser . .
 
-CMD ["bash"]
+# -------------------------------------------------------------
+# Default command (overridden by docker-compose)
+# -------------------------------------------------------------
+CMD ["python"]
