@@ -1,0 +1,18 @@
+# Prevent huge build context
+data/
+outputs/
+run_logs/
+__pycache__/
+*.pt
+*.log
+*.zip
+*.npz
+*.npy
+
+# Git & environments
+.git/
+.venv/
+*.pem
+aws/
+*.cert
+*.key
