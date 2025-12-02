@@ -1,138 +1,46 @@
 """
-Plots focusing on energy use, such as total Joules per client and mode.
+Plot total client energy consumption across modes.
+Used for Experiment 2: Energy Comparison.
 """
 
 import os
 import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd
+from .plot_utils import base_plot, ensure_plot_dir
 
-from .load_results import load_client_energy_summary
-from .plot_utils import set_plot_style, save_figure, nice_mode_label
-
-
-def build_energy_summary(logs_dir=None):
-    """
-    Build a tidy DataFrame with client energy summaries.
-
-    This aggregates the raw JSONL log client_energy_summary.log.
-    """
-    df = load_client_energy_summary(logs_dir=logs_dir)
-    if df.empty:
-        return df
-
-    # Normalise column names that are useful for plotting
-    if "role" not in df.columns and "client_role" in df.columns:
-        df["role"] = df["client_role"]
-
-    # Ensure numeric type for total energy
-    df["total_energy_j"] = pd.to_numeric(df["total_energy_j"], errors="coerce")
-    return df
+# Each client end-of-training prints:
+#   "[role] Finished 20 rounds. Total estimated energy=36.40 J."
+# We parse this from logs.
 
 
-def plot_total_energy_by_role(dataset_filter=None, out_path=None, logs_dir=None):
-    """
-    Plot total energy per client role and mode as a grouped bar chart.
-    """
-    set_plot_style()
-    df = build_energy_summary(logs_dir=logs_dir)
+def parse_energy_from_logs(dataset, mode):
+    """Extract total energy from client log files."""
+    log_path = "outputs/logs/events.log"
+    energies = {}
 
-    if df.empty:
-        raise RuntimeError("No client energy summary data found for plotting")
+    with open(log_path, "r") as f:
+        for line in f:
+            if f"{dataset}" not in line or mode not in line:
+                continue
+            if "Total estimated energy" in line:
+                parts = line.strip().split()
+                role = parts[1].strip("[]")
+                value = float(parts[-2])
+                energies[role] = value
 
-    df = df.copy()
-
-    if dataset_filter is not None:
-        df = df[df["dataset"] == dataset_filter]
-
-    if df.empty:
-        raise RuntimeError(
-            "No client energy data after filtering for dataset=%s" % dataset_filter
-        )
-
-    df["mode_label"] = df["mode"].apply(nice_mode_label)
-
-    fig, ax = plt.subplots(figsize=(6, 4))
-    sns.barplot(
-        data=df,
-        x="role",
-        y="total_energy_j",
-        hue="mode_label",
-        ax=ax,
-    )
-
-    ax.set_xlabel("Client role")
-    ax.set_ylabel("Total energy (J)")
-    if dataset_filter:
-        ax.set_title("Total energy per role and mode (%s)" % dataset_filter)
-    else:
-        ax.set_title("Total energy per role and mode")
-    ax.legend(title="Mode", frameon=True)
-
-    if out_path is None:
-        if dataset_filter:
-            filename = "energy_by_role_%s.png" % dataset_filter
-        else:
-            filename = "energy_by_role.png"
-        out_path = os.path.join("outputs", "plots", filename)
-
-    save_figure(fig, out_path)
-    return out_path
+    return energies
 
 
-def plot_total_energy_by_mode(dataset_filter=None, out_path=None, logs_dir=None):
-    """
-    Plot total energy summed across all roles for each mode.
-    """
-    df = build_energy_summary(logs_dir=logs_dir)
-    if df.empty:
-        raise RuntimeError("No client energy summary data found for plotting")
+def plot_energy(dataset, mode):
+    """Plot per-client total energy."""
+    out_dir = ensure_plot_dir(dataset, "energy")
 
-    df = df.copy()
+    energies = parse_energy_from_logs(dataset, mode)
+    roles = list(energies.keys())
+    values = list(energies.values())
 
-    if dataset_filter is not None:
-        df = df[df["dataset"] == dataset_filter]
+    base_plot(f"{dataset.upper()} - {mode.upper()} Energy", "Client Role", "Energy (J)")
+    plt.bar(roles, values)
+    plt.savefig(os.path.join(out_dir, f"{dataset}_{mode}_energy.png"))
+    plt.close()
 
-    if df.empty:
-        raise RuntimeError(
-            "No client energy data after filtering for dataset=%s" % dataset_filter
-        )
-
-    grouped = (
-        df.groupby(["dataset", "mode"])["total_energy_j"]
-        .sum()
-        .reset_index()
-    )
-
-    grouped["mode_label"] = grouped["mode"].apply(nice_mode_label)
-
-    set_plot_style()
-    fig, ax = plt.subplots(figsize=(6, 4))
-
-    if dataset_filter is not None:
-        plot_df = grouped[grouped["dataset"] == dataset_filter]
-    else:
-        plot_df = grouped
-
-    sns.barplot(
-        data=plot_df,
-        x="dataset",
-        y="total_energy_j",
-        hue="mode_label",
-        ax=ax,
-    )
-
-    ax.set_xlabel("Dataset")
-    ax.set_ylabel("Total energy (J)")
-    ax.set_title("Total energy across clients per mode")
-    ax.legend(title="Mode", frameon=True)
-
-    if out_path is None:
-        if dataset_filter:
-            filename = "energy_by_mode_%s.png" % dataset_filter
-        else:
-            filename = "energy_by_mode.png"
-        out_path = os.path.join("outputs", "plots", filename)
-
-    save_figure(fig, out_path)
-    return out_path
+    print(f"[analysis] Saved energy plot to {out_dir}")

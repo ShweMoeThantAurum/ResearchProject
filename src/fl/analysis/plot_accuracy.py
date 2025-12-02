@@ -1,70 +1,47 @@
 """
-Plots focusing on accuracy metrics such as MAE, RMSE and MAPE.
+Plot accuracy metrics (MAE, RMSE, MAPE) across FL modes.
+Used for Experiment 1: Accuracy Comparison.
 """
 
 import os
 import matplotlib.pyplot as plt
-import seaborn as sns
-
-from .load_results import load_all_final_metrics
-from .plot_utils import set_plot_style, save_figure, nice_mode_label
+from .load_results import load_metrics
+from .plot_utils import base_plot, ensure_plot_dir
 
 
-def plot_final_metric_bar(datasets, modes, metric, out_path=None, summaries_dir=None):
-    """
-    Plot a grouped bar chart of a final metric across datasets and modes.
-    """
-    set_plot_style()
-    df = load_all_final_metrics(datasets, modes, summaries_dir=summaries_dir)
-
-    if df.empty:
-        raise RuntimeError("No final metrics found for plotting %s" % metric)
-
-    if metric not in df.columns:
-        raise KeyError("Metric %s not found in final metrics DataFrame" % metric)
-
-    df = df.copy()
-    df["mode_label"] = df["mode"].apply(nice_mode_label)
-
-    fig, ax = plt.subplots(figsize=(6, 4))
-    sns.barplot(
-        data=df,
-        x="dataset",
-        y=metric,
-        hue="mode_label",
-        ax=ax,
-    )
-
-    ax.set_ylabel(metric)
-    ax.set_xlabel("Dataset")
-    ax.set_title("Final %s across datasets and FL modes" % metric)
-    ax.legend(title="Mode", frameon=True)
-
-    if out_path is None:
-        out_path = os.path.join("outputs", "plots", "final_%s_bar.png" % metric.lower())
-
-    save_figure(fig, out_path)
-    return out_path
+MODES = ["localonly", "fedavg", "fedprox", "aefl"]
 
 
-def plot_all_final_metrics(datasets, modes, out_dir=None, summaries_dir=None):
-    """
-    Convenience helper to plot MAE, RMSE and MAPE bar charts in one call.
-    """
-    if out_dir is None:
-        out_dir = os.path.join("outputs", "plots")
+def plot_accuracy_metrics(dataset):
+    """Plot MAE, RMSE, MAPE across FL modes."""
+    out_dir = ensure_plot_dir(dataset, "accuracy")
 
-    metrics = ["MAE", "RMSE", "MAPE"]
-    paths = {}
+    maes = []
+    rmses = []
+    mapes = []
 
-    for m in metrics:
-        out_path = os.path.join(out_dir, "final_%s_bar.png" % m.lower())
-        paths[m] = plot_final_metric_bar(
-            datasets=datasets,
-            modes=modes,
-            metric=m,
-            out_path=out_path,
-            summaries_dir=summaries_dir,
-        )
+    for mode in MODES:
+        m = load_metrics(dataset, mode)
+        maes.append(m["MAE"])
+        rmses.append(m["RMSE"])
+        mapes.append(m["MAPE"])
 
-    return paths
+    # MAE
+    base_plot(f"{dataset.upper()} - MAE Comparison", "Mode", "MAE")
+    plt.bar(MODES, maes)
+    plt.savefig(os.path.join(out_dir, f"{dataset}_mae.png"))
+    plt.close()
+
+    # RMSE
+    base_plot(f"{dataset.upper()} - RMSE Comparison", "Mode", "RMSE")
+    plt.bar(MODES, rmses)
+    plt.savefig(os.path.join(out_dir, f"{dataset}_rmse.png"))
+    plt.close()
+
+    # MAPE
+    base_plot(f"{dataset.upper()} - MAPE Comparison", "Mode", "MAPE")
+    plt.bar(MODES, mapes)
+    plt.savefig(os.path.join(out_dir, f"{dataset}_mape.png"))
+    plt.close()
+
+    print(f"[analysis] Saved accuracy plots to {out_dir}")
