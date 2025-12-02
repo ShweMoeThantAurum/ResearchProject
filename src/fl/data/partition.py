@@ -1,10 +1,10 @@
 """
-Node-level partitioning into IoT roles for federated learning.
+Client partitioning utilities for federated learning.
 
-This module:
-    - Partitions graph nodes (sensors) into logical IoT roles
-    - Supports both IID and Dirichlet Non-IID splits
-    - Saves per-role X/y arrays for client training
+This module supports:
+    - Splitting graph nodes into client subsets (IID or non-IID)
+    - Building per-client datasets from global X_train/y_train
+    - Mapping numeric client indices to semantic IoT roles
 """
 
 import os
@@ -12,120 +12,141 @@ import json
 import numpy as np
 
 
-DEFAULT_ROLES = ["roadside", "vehicle", "sensor", "camera", "bus"]
-
-
-def partition_nodes_to_roles(num_nodes,
-                             roles=None,
-                             noniid=False,
-                             imbalance_factor=0.4,
-                             seed=42):
+def split_clients_by_nodes(num_nodes,
+                           num_clients,
+                           noniid=False,
+                           imbalance_factor=0.4,
+                           seed=42):
     """
-    Partition node indices among roles.
+    Split node indices among clients.
 
-    If noniid=False:
-        - Split nodes as evenly as possible across roles.
-
-    If noniid=True:
-        - Sample node shares from a Dirichlet distribution and
-          assign contiguous chunks of shuffled nodes.
+    Parameters:
+        num_nodes        : total number of graph nodes
+        num_clients      : number of clients to create
+        noniid           : if True, use Dirichlet-based unbalanced split
+        imbalance_factor : not directly used here but kept for clarity
+        seed             : random seed for reproducibility
 
     Returns:
-        dict mapping role -> numpy array of node indices
+        A list of numpy arrays, one per client, containing node indices.
     """
-    if roles is None:
-        roles = list(DEFAULT_ROLES)
-
     rng = np.random.default_rng(seed)
     all_nodes = np.arange(num_nodes)
-    rng.shuffle(all_nodes)
-
-    num_roles = len(roles)
 
     if not noniid:
-        splits = np.array_split(all_nodes, num_roles)
-        return {role: splits[i] for i, role in enumerate(roles)}
+        return np.array_split(all_nodes, num_clients)
 
-    # Non-IID: Dirichlet-based shares with a simple imbalance factor
-    shares = rng.dirichlet(np.ones(num_roles) * imbalance_factor)
+    # Non-IID using Dirichlet proportions
+    shares = rng.dirichlet(np.ones(num_clients))
     sizes = np.maximum(1, (shares * num_nodes).astype(int))
 
-    # Fix rounding errors
     diff = num_nodes - sizes.sum()
     sizes[-1] += diff
 
-    role_to_nodes = {}
+    rng.shuffle(all_nodes)
+
+    splits = []
     start = 0
-    for i, role in enumerate(roles):
-        size = sizes[i]
-        role_to_nodes[role] = all_nodes[start:start + size]
-        start += size
+    for s in sizes:
+        splits.append(all_nodes[start:start + s])
+        start += s
 
-    return role_to_nodes
+    return splits
 
 
-def save_role_partitions(X_train,
-                         y_train,
-                         processed_dir,
-                         roles=None,
-                         noniid=False,
-                         imbalance_factor=0.4,
-                         seed=42):
+def build_client_datasets(proc_dir,
+                          num_clients=5,
+                          noniid=False,
+                          imbalance_factor=0.4,
+                          seed=42,
+                          role_map=None):
     """
-    Save per-role X/y arrays for each IoT role.
+    Create per-client training datasets from global X_train/y_train arrays.
 
-    Assumptions:
-        - X_train: [samples, seq_len, num_nodes]
-        - y_train: [samples, num_nodes]
-        - Nodes are along the last dimension.
+    This function:
+        - Loads X_train, y_train from proc_dir
+        - Splits node dimension among clients
+        - Saves per-client arrays into:
+              <proc_dir>/clients/client_<role>_X.npy
+              <proc_dir>/clients/client_<role>_y.npy
+        - Writes a meta.json summary with partition details
 
-    Files written into processed_dir:
-        - X_<role>.npy
-        - y_<role>.npy
-        - role_partitions.json (meta info)
+    Parameters:
+        proc_dir        : processed dataset directory
+        num_clients     : number of clients to create
+        noniid          : whether to simulate non-IID partitioning
+        imbalance_factor: kept for documentation (future extension)
+        seed            : random seed
+        role_map        : optional mapping {client_index: "role_name"}
+                          defaults to roadside, vehicle, sensor, camera, bus
     """
-    if roles is None:
-        roles = list(DEFAULT_ROLES)
+    print("Building client datasets | proc_dir=%s | noniid=%s | clients=%d" %
+          (proc_dir, noniid, num_clients))
+
+    x_path = os.path.join(proc_dir, "X_train.npy")
+    y_path = os.path.join(proc_dir, "y_train.npy")
+
+    if not os.path.exists(x_path) or not os.path.exists(y_path):
+        raise FileNotFoundError("Expected X_train.npy and y_train.npy in %s" %
+                                proc_dir)
+
+    X_train = np.load(x_path)
+    y_train = np.load(y_path)
 
     num_nodes = X_train.shape[-1]
-    role_to_nodes = partition_nodes_to_roles(
-        num_nodes,
-        roles=roles,
+
+    splits = split_clients_by_nodes(
+        num_nodes=num_nodes,
+        num_clients=num_clients,
         noniid=noniid,
         imbalance_factor=imbalance_factor,
         seed=seed,
     )
 
-    os.makedirs(processed_dir, exist_ok=True)
+    clients_dir = os.path.join(proc_dir, "clients")
+    os.makedirs(clients_dir, exist_ok=True)
 
-    meta = {
-        "num_nodes": int(num_nodes),
-        "roles": roles,
-        "partitions": {},
-        "noniid": bool(noniid),
-        "imbalance_factor": float(imbalance_factor),
-        "seed": int(seed),
-    }
-
-    for role in roles:
-        idxs = role_to_nodes[role]
-        X_role = X_train[:, :, idxs]
-        y_role = y_train[:, idxs]
-
-        np.save(os.path.join(processed_dir, "X_%s.npy" % role), X_role)
-        np.save(os.path.join(processed_dir, "y_%s.npy" % role), y_role)
-
-        meta["partitions"][role] = {
-            "num_nodes": int(len(idxs)),
-            "indices": idxs.tolist(),
+    if role_map is None:
+        role_map = {
+            0: "roadside",
+            1: "vehicle",
+            2: "sensor",
+            3: "camera",
+            4: "bus",
         }
 
-    with open(os.path.join(processed_dir, "role_partitions.json"), "w") as f:
+    client_sizes = []
+
+    for idx, node_idxs in enumerate(splits):
+        role = role_map.get(idx, "client%d" % idx)
+
+        X_local = X_train[:, :, node_idxs]
+        y_local = y_train[:, node_idxs]
+
+        x_out = os.path.join(clients_dir, "client_%s_X.npy" % role)
+        y_out = os.path.join(clients_dir, "client_%s_y.npy" % role)
+
+        np.save(x_out, X_local)
+        np.save(y_out, y_local)
+
+        client_sizes.append(len(node_idxs))
+
+        print("  Client %d (%s): nodes=%d" %
+              (idx, role, len(node_idxs)))
+
+    meta = {
+        "num_clients": num_clients,
+        "num_nodes": num_nodes,
+        "noniid": noniid,
+        "imbalance_factor": imbalance_factor,
+        "seed": seed,
+        "clients": client_sizes,
+        "role_map": role_map,
+    }
+
+    meta_path = os.path.join(proc_dir, "meta.json")
+    with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
 
-    print("Saved role partitions in %s" % processed_dir)
-    for role in roles:
-        print("  role=%s nodes=%d" %
-              (role, meta["partitions"][role]["num_nodes"]))
-
-    return role_to_nodes
+    print("Saved client datasets in %s" % clients_dir)
+    print("Node allocation per client:", client_sizes)

@@ -1,8 +1,8 @@
 """
-Model definitions used in the federated learning experiments.
+Model definitions for the federated learning framework.
 
-Currently exposes a lightweight GRU-based predictor for spatio-temporal
-traffic flow forecasting.
+Currently exposes:
+    - SimpleGRU : lightweight GRU-based traffic predictor
 """
 
 from .gru_model import SimpleGRU

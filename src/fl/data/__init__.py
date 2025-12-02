@@ -1,34 +1,40 @@
 """
-Data utilities for AEFL experiments.
+Data subpackage for federated learning.
 
-Includes:
-    - Preprocessing pipelines for SZ-Taxi, Los-Loop, PeMSD8
-    - Node partitioning into IoT roles
-    - Convenience loaders for train/valid/test splits
+Contains:
+    - loader      : load global arrays and client partitions
+    - partition   : create client splits from global data
+    - preprocess  : dataset-specific preprocessing pipelines
 """
 
-from .preprocess import (
-    preprocess_sz,
-    preprocess_los,
-    preprocess_pems08,
-)
-
 from .loader import (
-    load_splits,
     get_processed_dir,
+    load_global_arrays,
+    get_num_nodes,
+    load_client_partition,
 )
 
 from .partition import (
-    partition_nodes_to_roles,
-    save_role_partitions,
+    split_clients_by_nodes,
+    build_client_datasets,
+)
+
+from .preprocess import (
+    preprocess_dataset,
+    preprocess_pems08,
+    preprocess_los_loop,
+    preprocess_sz_taxi,
 )
 
 __all__ = [
-    "preprocess_sz",
-    "preprocess_los",
-    "preprocess_pems08",
-    "load_splits",
     "get_processed_dir",
-    "partition_nodes_to_roles",
-    "save_role_partitions",
+    "load_global_arrays",
+    "get_num_nodes",
+    "load_client_partition",
+    "split_clients_by_nodes",
+    "build_client_datasets",
+    "preprocess_dataset",
+    "preprocess_pems08",
+    "preprocess_los_loop",
+    "preprocess_sz_taxi",
 ]

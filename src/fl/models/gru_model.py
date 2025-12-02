@@ -1,44 +1,64 @@
 """
 Lightweight GRU-based model for spatio-temporal traffic prediction.
 
-Takes sequences of node-level traffic readings and predicts the next
-timestep values for all nodes in the graph.
+The model:
+    - Takes a sequence of node-level traffic readings
+    - Produces the next-step prediction for all nodes
+
+Input shape:
+    [batch_size, seq_len, num_nodes]
+
+Output shape:
+    [batch_size, num_nodes]
 """
 
 import torch
-import torch.nn as torch_nn
+import torch.nn as nn
 
 
-class SimpleGRU(torch_nn.Module):
+class SimpleGRU(nn.Module):
     """
-    Minimal GRU-based predictor shared across all FL modes.
+    Minimal GRU predictor shared across all FL baselines and AEFL.
 
-    Input:
-        X: [batch, seq_len, num_nodes]
-    Output:
-        y_pred: [batch, num_nodes]
+    Components:
+        - GRU encoder over temporal dimension
+        - Linear layer mapping hidden state to node-level outputs
     """
 
     def __init__(self, num_nodes, hidden_size=64, seq_len=12):
-        """Initialise GRU encoder and output projection layer."""
-        super().__init__()
+        """
+        Initialise the GRU encoder and output projection.
+
+        Parameters:
+            num_nodes  : number of graph nodes (features per timestep)
+            hidden_size: size of GRU hidden state
+            seq_len    : number of timesteps in the input sequence
+        """
+        super(SimpleGRU, self).__init__()
+
         self.num_nodes = num_nodes
         self.hidden_size = hidden_size
         self.seq_len = seq_len
 
-        # GRU encoder over time dimension
-        self.gru = torch_nn.GRU(
+        self.gru = nn.GRU(
             input_size=num_nodes,
             hidden_size=hidden_size,
             batch_first=True,
         )
 
-        # Linear head to map hidden state to node predictions
-        self.fc = torch_nn.Linear(hidden_size, num_nodes)
+        self.fc = nn.Linear(hidden_size, num_nodes)
 
     def forward(self, x):
-        """Run GRU over the input sequence and return predictions."""
-        out, _ = self.gru(x)        # out: [batch, seq_len, hidden]
-        final = out[:, -1, :]       # last time step
-        pred = self.fc(final)       # map to node outputs
+        """
+        Run GRU over the sequence and return next-step prediction.
+
+        Parameters:
+            x: tensor [batch_size, seq_len, num_nodes]
+
+        Returns:
+            pred: tensor [batch_size, num_nodes]
+        """
+        out, _ = self.gru(x)
+        last_hidden = out[:, -1, :]
+        pred = self.fc(last_hidden)
         return pred

@@ -1,96 +1,116 @@
 """
-Convenience loaders for processed datasets.
+Dataset loading utilities for federated learning experiments.
 
-Files expected under:
-    datasets/processed/<dataset>/
-
-Core files:
-    - X_train.npy
-    - y_train.npy
-    - X_valid.npy
-    - y_valid.npy
-    - X_test.npy
-    - y_test.npy
-
-Per-role files (created by preprocessing):
-    - X_<role>.npy
-    - y_<role>.npy
+This module handles:
+    - Loading global train/validation/test arrays from disk
+    - Inspecting dataset metadata (number of nodes, shapes)
+    - Loading per-client partitions created by the partition module
 """
 
 import os
 import numpy as np
-from src.fl.data.partition import DEFAULT_ROLES
 
 
-def get_processed_dir(dataset, root="datasets/processed"):
+def get_processed_dir(dataset_name):
     """
-    Return the processed directory for a dataset, e.g.
+    Return the processed dataset directory for the given dataset name.
 
-        datasets/processed/sz
-        datasets/processed/los
-        datasets/processed/pems08
+    Example:
+        dataset_name = "sz"
+        -> "datasets/processed/sz"
     """
-    return os.path.join(root, dataset)
+    return os.path.join("datasets", "processed", dataset_name)
 
 
-def _load_numpy(path):
-    if not os.path.exists(path):
-        raise FileNotFoundError("Missing %s" % path)
-    return np.load(path)
-
-
-def load_splits(dataset, root="datasets/processed"):
+def load_global_arrays(proc_dir):
     """
-    Load train/valid/test splits for a dataset.
+    Load global train/validation/test arrays from a processed directory.
 
-    Returns dict:
+    Expects files:
+        X_train.npy, y_train.npy
+        X_valid.npy, y_valid.npy
+        X_test.npy,  y_test.npy
+
+    Returns a dictionary:
         {
-            "X_train": ...,
-            "y_train": ...,
-            "X_valid": ...,
-            "y_valid": ...,
-            "X_test": ...,
-            "y_test": ...
+            "X_train": np.ndarray,
+            "y_train": np.ndarray,
+            "X_valid": np.ndarray,
+            "y_valid": np.ndarray,
+            "X_test":  np.ndarray,
+            "y_test":  np.ndarray,
         }
     """
-    proc_dir = get_processed_dir(dataset, root=root)
-
+    splits = ["train", "valid", "test"]
     data = {}
-    for split in ["train", "valid", "test"]:
-        X_path = os.path.join(proc_dir, "X_%s.npy" % split)
+
+    for split in splits:
+        x_path = os.path.join(proc_dir, "X_%s.npy" % split)
         y_path = os.path.join(proc_dir, "y_%s.npy" % split)
-        data["X_%s" % split] = _load_numpy(X_path)
-        data["y_%s" % split] = _load_numpy(y_path)
+
+        if not os.path.exists(x_path) or not os.path.exists(y_path):
+            raise FileNotFoundError("Missing X_%s or y_%s in %s" %
+                                    (split, split, proc_dir))
+
+        data["X_%s" % split] = np.load(x_path)
+        data["y_%s" % split] = np.load(y_path)
 
     return data
 
 
-def load_role_data(dataset, role, root="datasets/processed"):
+def get_num_nodes(proc_dir):
     """
-    Load per-role training data.
+    Infer the number of graph nodes from X_train.
+
+    Assumes X_train has shape:
+        [num_samples, seq_len, num_nodes]
+    """
+    x_path = os.path.join(proc_dir, "X_train.npy")
+    if not os.path.exists(x_path):
+        raise FileNotFoundError("Missing X_train.npy in %s" % proc_dir)
+
+    x = np.load(x_path)
+    return int(x.shape[-1])
+
+
+def client_partition_dir(proc_dir):
+    """
+    Return the clients/ directory inside a processed dataset directory.
+    """
+    return os.path.join(proc_dir, "clients")
+
+
+def get_client_file_paths(proc_dir, role):
+    """
+    Return file paths for a given client role.
+
+    Example:
+        role = "vehicle"
+        -> "clients/client_vehicle_X.npy"
+           "clients/client_vehicle_y.npy"
+    """
+    root = client_partition_dir(proc_dir)
+    x_path = os.path.join(root, "client_%s_X.npy" % role)
+    y_path = os.path.join(root, "client_%s_y.npy" % role)
+    return x_path, y_path
+
+
+def load_client_partition(proc_dir, role):
+    """
+    Load a client's local partition arrays (X, y) for a given role.
 
     Returns:
-        X_role, y_role
+        X_local: np.ndarray [samples, seq_len, num_nodes_local]
+        y_local: np.ndarray [samples, num_nodes_local]
     """
-    proc_dir = get_processed_dir(dataset, root=root)
+    x_path, y_path = get_client_file_paths(proc_dir, role)
 
-    X_path = os.path.join(proc_dir, "X_%s.npy" % role)
-    y_path = os.path.join(proc_dir, "y_%s.npy" % role)
+    if not os.path.exists(x_path):
+        raise FileNotFoundError("Missing client X file: %s" % x_path)
+    if not os.path.exists(y_path):
+        raise FileNotFoundError("Missing client y file: %s" % y_path)
 
-    X = _load_numpy(X_path)
-    y = _load_numpy(y_path)
+    X = np.load(x_path)
+    y = np.load(y_path)
 
     return X, y
-
-
-def list_available_roles(dataset, root="datasets/processed"):
-    """
-    Check which roles have X_<role>.npy present.
-    """
-    proc_dir = get_processed_dir(dataset, root=root)
-    roles = []
-    for role in DEFAULT_ROLES:
-        X_path = os.path.join(proc_dir, "X_%s.npy" % role)
-        if os.path.exists(X_path):
-            roles.append(role)
-    return roles

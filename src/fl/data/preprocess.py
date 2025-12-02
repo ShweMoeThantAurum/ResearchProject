@@ -1,245 +1,303 @@
 """
-Preprocessing pipelines for SZ-Taxi, Los-Loop, and PeMSD8.
+Dataset preprocessing pipelines for traffic flow prediction.
 
-Responsibilities:
-    - Download raw CSV/NPZ from S3 if missing
-    - Normalise speed/flow signals
-    - Build sliding-window sequences
-    - Split into train/valid/test
-    - Partition nodes into IoT roles and save X_<role>.npy / y_<role>.npy
+This module provides helpers to:
+    - Preprocess PeMSD8, Los-Loop, and SZ-Taxi datasets
+    - Construct sliding-window sequences
+    - Normalise signals
+    - Build client partitions
+
+Processed data is stored under:
+    datasets/processed/<dataset_name>/
+with files:
+    X_train.npy, y_train.npy
+    X_valid.npy, y_valid.npy
+    X_test.npy,  y_test.npy
+    clients/...
 """
 
 import os
-import boto3
 import numpy as np
 import pandas as pd
 
-from .partition import save_role_partitions
-
-
-BUCKET = os.environ.get("S3_BUCKET", "aefl")
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-
-s3 = boto3.client("s3", region_name=AWS_REGION)
+from src.fl.data.partition import build_client_datasets
 
 
 def _ensure_dir(path):
+    """
+    Create a directory if it does not exist.
+    """
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
 
 
-def _download_if_missing(key_prefix, filenames, local_dir):
+def _sliding_window_sequences(data, seq_len):
     """
-    Download a set of files from S3 if they are missing locally.
+    Construct sliding-window sequences from a 2D array.
 
-    key_prefix: e.g. "raw/sz/"
-    filenames:  list of names under that prefix
-    local_dir:  local directory under datasets/raw/<dataset>/
+    Parameters:
+        data    : np.ndarray [time, num_nodes]
+        seq_len : number of time steps in input sequence
+
+    Returns:
+        X: [num_samples, seq_len, num_nodes]
+        y: [num_samples, num_nodes]
     """
-    _ensure_dir(local_dir)
-    for fname in filenames:
-        local_path = os.path.join(local_dir, fname)
-        if os.path.exists(local_path):
-            print("%s already present." % local_path)
-            continue
-        s3_key = os.path.join(key_prefix, fname)
-        print("Downloading s3://%s/%s -> %s" % (BUCKET, s3_key, local_path))
-        s3.download_file(BUCKET, s3_key, local_path)
+    X = []
+    y = []
+    for i in range(len(data) - seq_len - 1):
+        X.append(data[i:i + seq_len])
+        y.append(data[i + seq_len])
+    return np.array(X), np.array(y)
 
 
-def _split_and_save(X,
-                    y,
-                    processed_dir,
-                    seq_len=12,
-                    train_ratio=0.7,
-                    val_ratio=0.15):
-    """
-    Split X, y into train/valid/test and save to processed_dir.
-
-    X: [time, num_nodes] or [samples, seq_len, num_nodes]
-    y: [time, num_nodes] or [samples, num_nodes]
-
-    If X has shape [time, num_nodes], this function first builds
-    sliding-window sequences of length seq_len.
-    """
-    _ensure_dir(processed_dir)
-
-    if X.ndim == 2:
-        # Build sequences
-        seq_X = []
-        seq_y = []
-        for i in range(len(X) - seq_len - 1):
-            seq_X.append(X[i:i + seq_len])
-            seq_y.append(X[i + seq_len])
-        X = np.array(seq_X)
-        y = np.array(seq_y)
-
-    n = len(X)
-    n_train = int(train_ratio * n)
-    n_val = int((train_ratio + val_ratio) * n)
-
-    X_train = X[:n_train]
-    y_train = y[:n_train]
-    X_valid = X[n_train:n_val]
-    y_valid = y[n_train:n_val]
-    X_test = X[n_val:]
-    y_test = y[n_val:]
-
-    np.save(os.path.join(processed_dir, "X_train.npy"), X_train)
-    np.save(os.path.join(processed_dir, "y_train.npy"), y_train)
-    np.save(os.path.join(processed_dir, "X_valid.npy"), X_valid)
-    np.save(os.path.join(processed_dir, "y_valid.npy"), y_valid)
-    np.save(os.path.join(processed_dir, "X_test.npy"), X_test)
-    np.save(os.path.join(processed_dir, "y_test.npy"), y_test)
-
-    print("Saved splits to %s" % processed_dir)
-    print("  Train: %d" % len(X_train))
-    print("  Valid: %d" % len(X_valid))
-    print("  Test:  %d" % len(X_test))
-
-    return X_train, y_train
-
-
-def preprocess_sz(root_raw="datasets/raw",
-                  root_processed="datasets/processed",
-                  noniid=False,
-                  imbalance_factor=0.4,
-                  seed=42):
-    """
-    Preprocess SZ-Taxi dataset.
-
-    Raw files expected (downloaded from S3 if missing):
-        - sz_speed.csv
-        - sz_adj.csv
-
-    Output directory:
-        datasets/processed/sz/
-    """
-    raw_dir = os.path.join(root_raw, "sz")
-    processed_dir = os.path.join(root_processed, "sz")
-
-    _download_if_missing("raw/sz", ["sz_speed.csv", "sz_adj.csv"], raw_dir)
-
-    speed = pd.read_csv(os.path.join(raw_dir, "sz_speed.csv"), header=None).values
-    adj = pd.read_csv(os.path.join(raw_dir, "sz_adj.csv"), header=None).values
-
-    # Normalise
-    speed = (speed - speed.mean()) / speed.std()
-
-    X_train, y_train = _split_and_save(speed, speed, processed_dir)
-
-    # Save adjacency for reference
-    np.save(os.path.join(processed_dir, "adj.npy"), adj)
-
-    # Partition nodes into roles and save per-role files
-    save_role_partitions(
-        X_train,
-        y_train,
-        processed_dir,
-        roles=None,
-        noniid=noniid,
-        imbalance_factor=imbalance_factor,
-        seed=seed,
-    )
-
-
-def preprocess_los(root_raw="datasets/raw",
-                   root_processed="datasets/processed",
-                   noniid=False,
-                   imbalance_factor=0.4,
-                   seed=42):
-    """
-    Preprocess Los-Loop dataset.
-
-    Raw files:
-        - los_speed.csv
-        - los_adj.csv
-
-    Output:
-        datasets/processed/los/
-    """
-    raw_dir = os.path.join(root_raw, "los")
-    processed_dir = os.path.join(root_processed, "los")
-
-    _download_if_missing("raw/los", ["los_speed.csv", "los_adj.csv"], raw_dir)
-
-    speed = pd.read_csv(os.path.join(raw_dir, "los_speed.csv"), header=None).values
-    adj = pd.read_csv(os.path.join(raw_dir, "los_adj.csv"), header=None).values
-
-    speed = (speed - speed.mean()) / speed.std()
-
-    X_train, y_train = _split_and_save(speed, speed, processed_dir)
-
-    np.save(os.path.join(processed_dir, "adj.npy"), adj)
-
-    save_role_partitions(
-        X_train,
-        y_train,
-        processed_dir,
-        roles=None,
-        noniid=noniid,
-        imbalance_factor=imbalance_factor,
-        seed=seed,
-    )
-
-
-def preprocess_pems08(root_raw="datasets/raw",
-                      root_processed="datasets/processed",
+def preprocess_pems08(raw_dir, out_dir,
+                      num_clients=5,
                       noniid=False,
                       imbalance_factor=0.4,
-                      seed=42):
+                      seed=42,
+                      seq_len=12):
     """
-    Preprocess PeMSD8 dataset.
+    Preprocess the PeMSD8 dataset from an NPZ file.
 
-    Raw NPZ file expected:
-        - pems08.npz
+    Expects:
+        raw_dir/pems08.npz
 
-    Inside NPZ we expect a tensor of shape:
-        [time, num_nodes, channels] or [num_nodes, time, channels]
-
-    Output:
-        datasets/processed/pems08/
+    Steps:
+        - Load traffic tensor
+        - Normalise values
+        - Build sliding-window sequences
+        - Split into train/valid/test
+        - Save npy arrays
+        - Build client partitions
     """
-    raw_dir = os.path.join(root_raw, "pems08")
-    processed_dir = os.path.join(root_processed, "pems08")
-
     _ensure_dir(raw_dir)
-    _ensure_dir(processed_dir)
+    _ensure_dir(out_dir)
 
-    fname = "pems08.npz"
-    local_npz = os.path.join(raw_dir, fname)
+    npz_path = os.path.join(raw_dir, "pems08.npz")
+    if not os.path.exists(npz_path):
+        raise FileNotFoundError("Missing pems08.npz in %s" % raw_dir)
 
-    if not os.path.exists(local_npz):
-        s3_key = os.path.join("raw/pems08", fname)
-        print("Downloading s3://%s/%s -> %s" % (BUCKET, s3_key, local_npz))
-        s3.download_file(BUCKET, s3_key, local_npz)
-    else:
-        print("%s already present." % local_npz)
+    arr = np.load(npz_path)
+    key = "data" if "data" in arr.files else arr.files[0]
+    data = arr[key]
 
-    arr = np.load(local_npz)
-    if "data" in arr.files:
-        data = arr["data"]
-    else:
-        data = arr[arr.files[0]]
-
-    # Collapse channel dimension to a single speed/flow channel
     if data.ndim == 3:
         if data.shape[0] < data.shape[1]:
             data = data.transpose(1, 0, 2)
         data = data[..., 0]
     elif data.ndim != 2:
-        raise ValueError("Unexpected PeMSD8 shape %s" % (data.shape,))
+        raise ValueError("Unexpected PeMSD8 shape: %s" % (data.shape,))
 
     data = (data - data.mean()) / data.std()
 
-    X_train, y_train = _split_and_save(data, data, processed_dir)
+    X, y = _sliding_window_sequences(data, seq_len)
+    n = len(X)
+    n_train = int(0.7 * n)
+    n_val = int(0.85 * n)
 
-    save_role_partitions(
-        X_train,
-        y_train,
-        processed_dir,
-        roles=None,
+    np.save(os.path.join(out_dir, "X_train.npy"), X[:n_train])
+    np.save(os.path.join(out_dir, "y_train.npy"), y[:n_train])
+    np.save(os.path.join(out_dir, "X_valid.npy"), X[n_train:n_val])
+    np.save(os.path.join(out_dir, "y_valid.npy"), y[n_train:n_val])
+    np.save(os.path.join(out_dir, "X_test.npy"), X[n_val:])
+    np.save(os.path.join(out_dir, "y_test.npy"), y[n_val:])
+
+    print("PeMSD8: train=%d val=%d test=%d nodes=%d" %
+          (n_train, n_val - n_train, n - n_val, X.shape[-1]))
+
+    build_client_datasets(
+        proc_dir=out_dir,
+        num_clients=num_clients,
         noniid=noniid,
         imbalance_factor=imbalance_factor,
         seed=seed,
+    )
+
+
+def preprocess_los_loop(raw_dir, out_dir,
+                        num_clients=5,
+                        noniid=False,
+                        imbalance_factor=0.4,
+                        seed=42,
+                        seq_len=12):
+    """
+    Preprocess the Los-Loop dataset from CSV files.
+
+    Expects:
+        raw_dir/los_speed.csv
+        raw_dir/los_adj.csv
+
+    Steps:
+        - Load speed matrix and adjacency matrix
+        - Normalise signals
+        - Build sliding-window sequences
+        - Split into train/valid/test
+        - Save npy arrays
+        - Build client partitions
+    """
+    _ensure_dir(raw_dir)
+    _ensure_dir(out_dir)
+
+    speed_path = os.path.join(raw_dir, "los_speed.csv")
+    adj_path = os.path.join(raw_dir, "los_adj.csv")
+
+    if not os.path.exists(speed_path) or not os.path.exists(adj_path):
+        raise FileNotFoundError("Missing los_speed.csv or los_adj.csv in %s" %
+                                raw_dir)
+
+    speed = pd.read_csv(speed_path, header=None).values
+    adj = pd.read_csv(adj_path, header=None).values
+
+    speed = (speed - speed.mean()) / speed.std()
+
+    X, y = _sliding_window_sequences(speed, seq_len)
+    n = len(X)
+    n_train = int(0.7 * n)
+    n_val = int(0.85 * n)
+
+    np.save(os.path.join(out_dir, "X_train.npy"), X[:n_train])
+    np.save(os.path.join(out_dir, "y_train.npy"), y[:n_train])
+    np.save(os.path.join(out_dir, "X_valid.npy"), X[n_train:n_val])
+    np.save(os.path.join(out_dir, "y_valid.npy"), y[n_train:n_val])
+    np.save(os.path.join(out_dir, "X_test.npy"), X[n_val:])
+    np.save(os.path.join(out_dir, "y_test.npy"), y[n_val:])
+    np.save(os.path.join(out_dir, "adj.npy"), adj)
+
+    print("Los-Loop: train=%d val=%d test=%d nodes=%d" %
+          (n_train, n_val - n_train, n - n_val, X.shape[-1]))
+
+    build_client_datasets(
+        proc_dir=out_dir,
+        num_clients=num_clients,
+        noniid=noniid,
+        imbalance_factor=imbalance_factor,
+        seed=seed,
+    )
+
+
+def preprocess_sz_taxi(proc_dir,
+                       num_clients=5,
+                       noniid=False,
+                       imbalance_factor=0.4,
+                       seed=42):
+    """
+    Prepare SZ-Taxi client partitions.
+
+    Assumes that:
+        proc_dir contains already prepared:
+            X_train.npy, y_train.npy,
+            X_valid.npy, y_valid.npy,
+            X_test.npy,  y_test.npy
+
+    This function does not recompute SZ-Taxi preprocessing
+    (which is often done offline), but only builds client splits.
+    """
+    required = [
+        "X_train.npy", "y_train.npy",
+        "X_valid.npy", "y_valid.npy",
+        "X_test.npy", "y_test.npy",
+    ]
+
+    for name in required:
+        path = os.path.join(proc_dir, name)
+        if not os.path.exists(path):
+            raise FileNotFoundError("SZ-Taxi requires %s in %s" %
+                                    (name, proc_dir))
+
+    print("SZ-Taxi: found prepared arrays in %s" % proc_dir)
+
+    build_client_datasets(
+        proc_dir=proc_dir,
+        num_clients=num_clients,
+        noniid=noniid,
+        imbalance_factor=imbalance_factor,
+        seed=seed,
+    )
+
+
+def preprocess_dataset(dataset_name,
+                       raw_root="datasets/raw",
+                       proc_root="datasets/processed",
+                       num_clients=5,
+                       noniid=False,
+                       imbalance_factor=0.4,
+                       seed=42,
+                       seq_len=12):
+    """
+    Dispatch function to preprocess a given dataset name.
+
+    Supported names:
+        - "pems08"
+        - "los"
+        - "sz"
+
+    For SZ-Taxi, this expects that the prepared arrays
+    already exist under:
+        datasets/processed/sz
+    """
+    dataset_name = dataset_name.lower()
+
+    if dataset_name == "pems08":
+        raw_dir = os.path.join(raw_root, "pems08")
+        out_dir = os.path.join(proc_root, "pems08")
+        preprocess_pems08(
+            raw_dir=raw_dir,
+            out_dir=out_dir,
+            num_clients=num_clients,
+            noniid=noniid,
+            imbalance_factor=imbalance_factor,
+            seed=seed,
+            seq_len=seq_len,
+        )
+    elif dataset_name == "los":
+        raw_dir = os.path.join(raw_root, "los")
+        out_dir = os.path.join(proc_root, "los")
+        preprocess_los_loop(
+            raw_dir=raw_dir,
+            out_dir=out_dir,
+            num_clients=num_clients,
+            noniid=noniid,
+            imbalance_factor=imbalance_factor,
+            seed=seed,
+            seq_len=seq_len,
+        )
+    elif dataset_name == "sz":
+        out_dir = os.path.join(proc_root, "sz")
+        preprocess_sz_taxi(
+            proc_dir=out_dir,
+            num_clients=num_clients,
+            noniid=noniid,
+            imbalance_factor=imbalance_factor,
+            seed=seed,
+        )
+    else:
+        raise ValueError("Unsupported dataset name: %s" % dataset_name)
+
+
+if __name__ == "__main__":
+    # Simple CLI entrypoint, if you want to run:
+    #   python -m src.fl.data.preprocess pems08
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Preprocess datasets for federated learning"
+    )
+    parser.add_argument("dataset", type=str,
+                        help="Dataset name: pems08, los, sz")
+    parser.add_argument("--clients", type=int, default=5)
+    parser.add_argument("--noniid", action="store_true")
+    parser.add_argument("--imbalance", type=float, default=0.4)
+    parser.add_argument("--seq_len", type=int, default=12)
+    parser.add_argument("--seed", type=int, default=42)
+
+    args = parser.parse_args()
+
+    preprocess_dataset(
+        dataset_name=args.dataset,
+        num_clients=args.clients,
+        noniid=args.noniid,
+        imbalance_factor=args.imbalance,
+        seed=args.seed,
+        seq_len=args.seq_len,
     )
