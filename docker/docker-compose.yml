@@ -1,89 +1,64 @@
 version: "3.9"
 
-x-common: &common
-  build:
-    context: ..
-    dockerfile: docker/Dockerfile
-  working_dir: /app
-  network_mode: host
-  restart: "no"
-  volumes:
-    - ..:/app
-    - ~/.aws:/root/.aws:ro
-  environment: &env_common
-    AWS_REGION: "us-east-1"
-    S3_BUCKET: "aefl"
-    DATASET: "${DATASET}"
-
-    FL_MODE: "AEFL"
-    FL_ROUNDS: 20
-    BATCH_SIZE: 64
-    LOCAL_EPOCHS: 1
-    LR: 0.001
-    HIDDEN_SIZE: 64
-
-    DEVICE_POWER_WATTS: 3.5
-    NET_J_PER_MB: 0.6
-
-    DP_ENABLED: "true"
-    DP_SIGMA: 0.05
-
-    COMPRESSION_ENABLED: "true"
-    COMPRESSION_MODE: "sparsify"
-    COMPRESSION_SPARSITY: 0.5
+# AEFL Federated Learning: 5 Clients + External Server
+# Server runs manually on host: python -m src.fl.server
 
 services:
-
-  # ======================
-  # Federated Server
-  # ======================
-  server:
-    <<: *common
-    container_name: fl_server
-    environment:
-      <<: *env_common
-    command: [ "server" ]
-
-  # ======================
-  # Federated Clients
-  # ======================
-
-  roadside:
-    <<: *common
+  client_roadside:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: client_roadside
+    network_mode: host
     environment:
-      <<: *env_common
       CLIENT_ROLE: "roadside"
-    command: [ "client" ]
+      DATASET: "${DATASET}"
+      FL_MODE: "${FL_MODE}"
+      FL_ROUNDS: "${FL_ROUNDS}"
+      BATCH_SIZE: "${BATCH_SIZE}"
+      LOCAL_EPOCHS: "${LOCAL_EPOCHS}"
+      LR: "${LR}"
+      HIDDEN_SIZE: "${HIDDEN_SIZE}"
 
-  vehicle:
-    <<: *common
+      DEVICE_POWER_WATTS: "${DEVICE_POWER_WATTS}"
+      NET_J_PER_MB: "${NET_J_PER_MB}"
+
+      DP_ENABLED: "${DP_ENABLED}"
+      DP_SIGMA: "${DP_SIGMA}"
+
+      COMPRESSION_ENABLED: "${COMPRESSION_ENABLED}"
+      COMPRESSION_MODE: "${COMPRESSION_MODE}"
+      COMPRESSION_SPARSITY: "${COMPRESSION_SPARSITY}"
+      COMPRESSION_K_FRAC: "${COMPRESSION_K_FRAC}"
+
+      AWS_REGION: "${AWS_REGION}"
+      S3_BUCKET: "${S3_BUCKET}"
+
+    volumes:
+      - ..:/app
+      - ~/.aws:/root/.aws:ro
+    command: [ "python", "-m", "src.fl.client" ]
+
+  client_vehicle:
+    extends: client_roadside
     container_name: client_vehicle
     environment:
-      <<: *env_common
       CLIENT_ROLE: "vehicle"
-    command: [ "client" ]
 
-  sensor:
-    <<: *common
+  client_sensor:
+    extends: client_roadside
     container_name: client_sensor
     environment:
-      <<: *env_common
       CLIENT_ROLE: "sensor"
-    command: [ "client" ]
 
-  camera:
-    <<: *common
+  client_camera:
+    extends: client_roadside
     container_name: client_camera
     environment:
-      <<: *env_common
       CLIENT_ROLE: "camera"
-    command: [ "client" ]
 
-  bus:
-    <<: *common
+  client_bus:
+    extends: client_roadside
     container_name: client_bus
     environment:
-      <<: *env_common
       CLIENT_ROLE: "bus"
-    command: [ "client" ]

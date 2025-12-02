@@ -1,24 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Entrypoint for client containers. Runs FL client process.
 
-echo "[ENTRYPOINT] Starting container for role: $CLIENT_ROLE"
+set -e
 
-# Fail if role is missing
-if [ -z "$CLIENT_ROLE" ] && [ "$1" = "client" ]; then
-    echo "[ERROR] CLIENT_ROLE must be set for client containers."
-    exit 1
-fi
+echo "[entrypoint] Starting client for role=$CLIENT_ROLE mode=$FL_MODE dataset=$DATASET"
 
-# Server mode
-if [ "$1" = "server" ]; then
-    echo "[ENTRYPOINT] Launching FL server..."
-    exec python -m src.fl.server_main
-fi
-
-# Client mode
-if [ "$1" = "client" ]; then
-    echo "[ENTRYPOINT] Launching FL client ($CLIENT_ROLE)..."
-    exec python -m src.fl.client_main
-fi
-
-echo "[ENTRYPOINT] Unknown mode. Expected 'client' or 'server'."
-exit 1
+exec python -m src.fl.client
