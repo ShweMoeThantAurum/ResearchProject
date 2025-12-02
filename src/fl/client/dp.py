@@ -1,42 +1,22 @@
 """
-Local differential privacy utilities for client updates.
-
-This module wraps the Gaussian noise mechanism from src.fl.utils.privacy
-and applies it conditionally based on environment variables.
+Differential privacy noise addition for model updates.
 """
 
-import os
-from src.fl.utils.privacy import dp_add_noise
+import torch
+import numpy as np
+
+from src.fl.config import settings
 
 
-def dp_is_enabled():
+def apply_dp(update):
     """
-    Return True if differential privacy is enabled for this client.
-
-    Reads DP_ENABLED from environment variables.
+    Add Gaussian noise to parameters.
     """
-    flag = os.environ.get("DP_ENABLED", "false").strip().lower()
-    return flag in ["1", "true", "yes", "on"]
+    sigma = settings.get_dp_sigma()
 
+    new_update = {}
+    for k, v in update.items():
+        noise = torch.randn_like(v) * sigma
+        new_update[k] = v + noise
 
-def get_dp_sigma():
-    """
-    Return the standard deviation of Gaussian noise for DP.
-
-    Reads DP_SIGMA from environment variables, defaults to 0.01.
-    """
-    return float(os.environ.get("DP_SIGMA", "0.01"))
-
-
-def maybe_add_dp_noise(state_dict):
-    """
-    Add Gaussian noise to model parameters if DP is enabled.
-
-    Returns the possibly modified state_dict.
-    """
-    if not dp_is_enabled():
-        return state_dict
-
-    sigma = get_dp_sigma()
-    noisy = dp_add_noise(state_dict, sigma)
-    return noisy
+    return new_update

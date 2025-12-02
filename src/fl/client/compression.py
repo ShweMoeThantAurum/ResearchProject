@@ -1,73 +1,58 @@
 """
-Client-side model compression utilities.
-
-This module wraps the compression primitives in src.fl.utils.compression
-and applies them conditionally based on environment variables.
-
-Supported modes:
-    - sparsify  : magnitude pruning to a target sparsity
-    - topk      : top-k sparsification
-    - q8 / int8 : symmetric 8-bit quantisation
+Model update compression (sparsification or top-k).
 """
 
-import os
-
-from src.fl.utils.compression import (
-    sparsify_state,
-    topk_compress_state,
-    quantize8_state,
-    dense_state_size_bytes,
-)
+import torch
+import numpy as np
+from src.fl.config import settings
 
 
-def compression_is_enabled():
+def apply_compression(update):
     """
-    Return True if model compression is enabled.
-
-    Reads COMPRESSION_ENABLED from environment variables.
+    Apply sparsification or top-k depending on config.
     """
-    flag = os.environ.get("COMPRESSION_ENABLED", "false").strip().lower()
-    return flag in ["1", "true", "yes", "on"]
+    mode = settings.get_compression_mode()
+
+    if mode == "sparsify":
+        return sparsify(update)
+    elif mode == "topk":
+        return topk(update)
+
+    return update
 
 
-def get_compression_settings():
+def sparsify(update):
     """
-    Return compression settings from environment variables.
-
-    Returns:
-        mode          : compression mode string
-        sparsity      : target sparsity for magnitude pruning
-        k_frac        : fraction of parameters kept for top-k
+    Zero out a fraction of smallest-magnitude weights.
     """
-    mode = os.environ.get("COMPRESSION_MODE", "sparsify").strip().lower()
-    sparsity = float(os.environ.get("COMPRESSION_SPARSITY", "0.5"))
-    k_frac = float(os.environ.get("COMPRESSION_K_FRAC", "0.1"))
-    return mode, sparsity, k_frac
+    frac = settings.get_compression_sparsity()
+    new = {}
+
+    for k, v in update.items():
+        flat = v.view(-1)
+        k_val = int(len(flat) * frac)
+        thresh = flat.abs().kthvalue(k_val).values.item()
+
+        mask = v.abs() >= thresh
+        new[k] = v * mask
+
+    return new
 
 
-def maybe_compress_state(state_dict):
+def topk(update):
     """
-    Optionally compress a model state_dict before upload.
-
-    Returns:
-        compressed_state : potentially modified state_dict
-        kept_ratio       : fraction of kept parameters
-        payload_bytes    : estimated number of bytes on the wire
+    Keep only top-K fraction of weights.
     """
-    if not compression_is_enabled():
-        payload_bytes = dense_state_size_bytes(state_dict)
-        return state_dict, 1.0, payload_bytes
+    frac = settings.get_compression_k_frac()
+    new = {}
 
-    mode, sparsity, k_frac = get_compression_settings()
+    for k, v in update.items():
+        flat = v.view(-1)
+        k_val = int(len(flat) * frac)
+        topk_vals, _ = torch.topk(flat.abs(), k_val)
+        thresh = topk_vals.min()
 
-    if mode in ["sparsify", "magnitude", "prune"]:
-        return sparsify_state(state_dict, sparsity)
+        mask = v.abs() >= thresh
+        new[k] = v * mask
 
-    if mode == "topk":
-        return topk_compress_state(state_dict, k_frac)
-
-    if mode in ["q8", "int8"]:
-        return quantize8_state(state_dict)
-
-    payload_bytes = dense_state_size_bytes(state_dict)
-    return state_dict, 1.0, payload_bytes
+    return new

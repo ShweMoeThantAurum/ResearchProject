@@ -1,3 +1,3 @@
 """
-Client-side federated learning package.
+Client-side FL modules.
 """
