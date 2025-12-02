@@ -1,21 +1,22 @@
 """
-Differential Privacy: Gaussian noise addition.
+Local differential privacy utilities.
 
-Enabled if DP_ENABLED=true.
+Implements Gaussian noise addition to model parameters,
+controlled by sigma (noise magnitude).
 """
 
-import os
+
 import torch
-import numpy as np
 
 
-def apply_dp_noise(update):
-    """Add independent Gaussian noise to each parameter tensor."""
-    sigma = float(os.environ.get("DP_SIGMA", 0.05))
+def apply_dp(state_dict, sigma):
+    """
+    Apply Gaussian noise to all model parameters for local DP.
 
-    noisy_update = {}
-    for k, v in update.items():
-        arr = v.numpy()
-        noise = np.random.normal(0, sigma, size=arr.shape).astype(arr.dtype)
-        noisy_update[k] = torch.tensor(arr + noise)
-    return noisy_update
+    Parameters:
+        state_dict : PyTorch parameter dictionary
+        sigma      : noise standard deviation
+    """
+    for name in state_dict:
+        noise = torch.randn_like(state_dict[name]) * sigma
+        state_dict[name].add_(noise)

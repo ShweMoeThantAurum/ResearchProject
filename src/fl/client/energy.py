@@ -1,54 +1,38 @@
 """
-Energy model for federated client training and communication.
+Energy estimation utilities for client devices.
 
-Energy components:
-    - compute_time_j  (device wattage * time)
-    - compute_flops_j (approx FLOP cost of GRU layer)
-    - comm_energy_j   (upload size * energy per MB)
+We track:
+    - compute energy (proportional to execution time)
+    - communication energy (uploading update to server)
 """
 
-import os
-import sys
-import torch
-import numpy as np
+import random
 
 
-def compute_energy(train_time, update):
+def estimate_energy(train_time,
+                    flops,
+                    update_size_mb,
+                    power_watts,
+                    net_j_per_mb):
     """
-    Compute energy usage for:
-        - compute (time)
-        - compute FLOPs
-        - communication (MB)
+    Estimate compute and communication energy for a client round.
+
+    compute_j = train_time * power_watts
+    comm_j    = update_size_mb * net_j_per_mb
+    total     = compute_j + comm_j
+
+    We also generate a random bandwidth estimate for AEFL scoring.
     """
+    compute = train_time * power_watts
+    comm = update_size_mb * net_j_per_mb
+    total = compute + comm
 
-    # Device profile
-    watts = float(os.environ.get("DEVICE_POWER_WATTS", 3.5))
-    joules_per_mb = float(os.environ.get("NET_J_PER_MB", 0.6))
-
-    # Compute energy from time
-    compute_time_j = watts * train_time
-
-    # FLOPs (very rough estimate)
-    flops = 1014.0
-    compute_flops_j = flops * 1e-6
-
-    # Communication cost
-    total_bytes = 0
-    for k, v in update.items():
-        total_bytes += v.numpy().nbytes
-
-    mb = total_bytes / (1024 * 1024)
-    comm_energy_j = mb * joules_per_mb
-
-    # Fake "bandwidth" estimation from upload time
-    bandwidth_mbps = np.random.uniform(10, 50)
-
-    total_energy_j = compute_time_j + compute_flops_j + comm_energy_j
+    # Simulated bandwidth: this only affects AEFL scoring
+    bw = random.uniform(10.0, 55.0)
 
     return {
-        "compute_time_j": compute_time_j,
-        "compute_flops_j": compute_flops_j,
-        "comm_energy_j": comm_energy_j,
-        "total_energy_j": total_energy_j,
-        "bandwidth_mbps": bandwidth_mbps,
+        "compute": compute,
+        "comm": comm,
+        "total": total,
+        "bw": bw,
     }

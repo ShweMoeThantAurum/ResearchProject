@@ -1,47 +1,67 @@
 """
-Local training for one FL round.
+Local model training for a single FL round.
 
-Loads global model weights, trains on the client's local partition,
-and returns the parameter update (state_dict difference).
+This module executes:
+    - forward/backward passes
+    - one or more epochs over the client's local data
+    - computes FLOPs for energy tracking
 """
 
 import time
 import torch
 import torch.nn as nn
 
-from src.fl.models import SimpleGRU
 
-
-def run_local_training(global_state, X, y, hidden_size):
+def train_one_round(model,
+                    X_local,
+                    y_local,
+                    lr,
+                    batch_size,
+                    epochs,
+                    device):
     """
-    Load global model -> train locally -> return update dict.
+    Train the model for one FL round using the client's local dataset.
+
+    Parameters:
+        model      : PyTorch model
+        X_local    : local inputs  [N, seq_len, nodes]
+        y_local    : local targets [N, nodes]
+        lr         : learning rate
+        batch_size : training batch size
+        epochs     : number of passes over dataset
+        device     : compute device
+
+    Returns:
+        loss       : final epoch loss
+        train_time : seconds spent training
+        flops      : very rough estimate of floating-point operations
     """
-    device = torch.device("cpu")
-
-    num_nodes = X.shape[-1]
-
-    model = SimpleGRU(num_nodes=num_nodes, hidden_size=hidden_size).to(device)
-    model.load_state_dict(global_state)
-
     model.train()
-
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    X_t = torch.from_numpy(X).float().to(device)
-    y_t = torch.from_numpy(y).float().to(device)
+    X = torch.from_numpy(X_local).float().to(device)
+    y = torch.from_numpy(y_local).float().to(device)
 
-    timer = time.time()
-    optimizer.zero_grad()
-    pred = model(X_t)
-    loss = criterion(pred, y_t)
-    loss.backward()
-    optimizer.step()
-    train_time = time.time() - timer
+    n = X.shape[0]
 
-    # Compute update
-    update = {}
-    for name, param in model.state_dict().items():
-        update[name] = param.cpu()
+    start = time.time()
+    flops = 0.0
 
-    return update, loss.item(), train_time
+    for _ in range(epochs):
+        for i in range(0, n, batch_size):
+            xb = X[i:i + batch_size]
+            yb = y[i:i + batch_size]
+
+            pred = model(xb)
+            loss = criterion(pred, yb)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            flops += xb.numel() * 2
+
+    elapsed = time.time() - start
+
+    return loss.item(), elapsed, flops

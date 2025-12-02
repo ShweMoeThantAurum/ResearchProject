@@ -1,98 +1,147 @@
 """
-Client-side federated learning loop.
+Client-side main loop for federated learning.
 
-Each client:
-    - Waits for the global model
-    - Trains locally for one round
-    - Applies optional DP and compression
-    - Computes energy consumption
-    - Uploads the update + metadata to S3
+Responsibilities:
+    - Load global model from S3 for each round
+    - Train locally on client-specific partitions
+    - Compute energy consumption (compute + communication)
+    - Apply optional:
+        • differential privacy (DP)
+        • gradient compression
+    - Upload processed model update and metadata
 """
 
 import os
 import time
 import json
 import torch
-import numpy as np
 
-from src.fl.client.train import run_local_training
-from src.fl.client.energy import compute_energy
-from src.fl.client.comm import download_global_model, upload_update
-from src.fl.client.dp import apply_dp_noise
+from src.fl.client.train import train_one_round
+from src.fl.client.energy import estimate_energy
+from src.fl.client.comm import (
+    download_global_model,
+    upload_client_update,
+    upload_client_metadata,
+)
+from src.fl.client.dp import apply_dp
 from src.fl.client.compression import apply_compression
-from src.fl.client.utils_client import load_client_dataset, print_flush
-from src.fl.utils.serialization import load_torch
-from src.fl.server.s3_io import upload_json
+from src.fl.client.utils_client import load_client_data
+
+from src.fl.models import SimpleGRU
 
 
 def main():
+    """
+    Entry point for the client container.
+    Handles the full FL lifecycle for the assigned role.
+    """
     role = os.environ.get("CLIENT_ROLE")
     dataset = os.environ.get("DATASET")
-    mode = os.environ.get("FL_MODE", "AEFL")
-    bucket = os.environ.get("S3_BUCKET", "aefl")
-
+    mode = os.environ.get("FL_MODE", "aefl").lower()
     rounds = int(os.environ.get("FL_ROUNDS", 20))
     hidden = int(os.environ.get("HIDDEN_SIZE", 64))
+    device = torch.device("cpu")
 
     proc_dir = os.path.join("datasets", "processed", dataset)
+    bucket = os.environ.get("S3_BUCKET", "aefl")
 
-    print_flush("[%s] Starting client | mode=%s rounds=%d" % (role, mode, rounds))
+    if role is None:
+        raise RuntimeError("CLIENT_ROLE not set in environment")
+
+    print("[%s] Starting federated client | dataset=%s mode=%s" %
+          (role, dataset, mode))
 
     # Load local dataset partition
-    X_train, y_train = load_client_dataset(proc_dir, role)
+    X_local, y_local = load_client_data(proc_dir, role)
+    num_nodes = X_local.shape[-1]
 
-    # Tracking accumulated energy
-    total_energy = 0.0
+    # Prepare model
+    model = SimpleGRU(num_nodes=num_nodes, hidden_size=hidden).to(device)
 
     for r in range(1, rounds + 1):
-        print_flush("\n[%s] ===== ROUND %d =====" % (role, r))
+        print("\n[%s] ===== ROUND %d =====" % (role, r))
 
-        # 1. Wait for global model
-        print_flush("[%s] Waiting for global model round %d..." % (role, r))
-        global_state = download_global_model(bucket, dataset, mode, r)
+        # Download global model
+        print("[%s] Waiting for global model round %d..." % (role, r))
+        state = download_global_model(bucket, dataset, mode, r, timeout=600)
 
-        # 2. Local training
-        update, train_loss, train_time = run_local_training(
-            global_state,
-            X_train,
-            y_train,
-            hidden
+        model.load_state_dict(state)
+
+        # Local training
+        loss, train_time, flops = train_one_round(
+            model=model,
+            X_local=X_local,
+            y_local=y_local,
+            lr=float(os.environ.get("LR", 0.001)),
+            batch_size=int(os.environ.get("BATCH_SIZE", 64)),
+            epochs=int(os.environ.get("LOCAL_EPOCHS", 1)),
+            device=device,
         )
 
-        print_flush("[%s] Round %d training | loss=%.6f time=%.3fs samples=%d"
-                    % (role, r, train_loss, train_time, len(X_train)))
+        print("[%s] Round %d training | loss=%.6f time=%.3fs" %
+              (role, r, loss, train_time))
 
-        # 3. Energy computation
-        energy = compute_energy(train_time, update)
-        total_energy += energy["total_energy_j"]
+        # Extract update
+        updated_state = model.state_dict()
 
-        print_flush("[%s] Energy round %d: compute_time=%.2f J, compute_flops=%.2f J, comm_total=%.4f J, total=%.4f J"
-                    % (role, r, energy["compute_time_j"], energy["compute_flops_j"],
-                       energy["comm_energy_j"], energy["total_energy_j"]))
-
-        # 4. DP noise
+        # Optional: Differential Privacy
         if os.environ.get("DP_ENABLED", "false").lower() == "true":
-            update = apply_dp_noise(update)
+            sigma = float(os.environ.get("DP_SIGMA", 0.01))
+            apply_dp(updated_state, sigma)
 
-        # 5. Compression
+        # Optional: Compression
         if os.environ.get("COMPRESSION_ENABLED", "false").lower() == "true":
-            update = apply_compression(update)
+            mode_c = os.environ.get("COMPRESSION_MODE", "sparsify")
+            sparsity = float(os.environ.get("COMPRESSION_SPARSITY", 0.5))
+            k_frac = float(os.environ.get("COMPRESSION_K_FRAC", 0.1))
 
-        # 6. Upload update
-        upload_update(bucket, dataset, mode, r, role, update)
+            apply_compression(
+                updated_state,
+                mode_c,
+                sparsity=sparsity,
+                k_frac=k_frac,
+            )
 
-        # 7. Upload metadata
+        # Estimate energy
+        energy = estimate_energy(
+            train_time=train_time,
+            flops=flops,
+            update_size_mb=0.204,  # constant for now
+            power_watts=float(os.environ.get("DEVICE_POWER_WATTS", 3.5)),
+            net_j_per_mb=float(os.environ.get("NET_J_PER_MB", 0.6)),
+        )
+
+        # Upload update
+        upload_client_update(
+            bucket=bucket,
+            dataset=dataset,
+            mode=mode,
+            round_id=r,
+            role=role,
+            state_dict=updated_state,
+        )
+
+        # Upload metadata
         meta = {
-            "bandwidth_mbps": energy["bandwidth_mbps"],
-            "total_energy_j": energy["total_energy_j"]
+            "bandwidth_mbps": energy["bw"],
+            "total_energy_j": energy["total"],
+            "compute_j": energy["compute"],
+            "comm_j": energy["comm"],
         }
-        upload_json(bucket, dataset, mode, r, "%s_metadata.json" % role, meta)
 
-        print_flush("[%s] Uploaded metadata for round %d: bandwidth=%.3f Mb/s total_energy=%.2f J"
-                    % (role, r, meta["bandwidth_mbps"], meta["total_energy_j"]))
+        upload_client_metadata(
+            bucket=bucket,
+            dataset=dataset,
+            mode=mode,
+            round_id=r,
+            role=role,
+            metadata=meta,
+        )
 
-    print_flush("[%s] Finished %d rounds. Total estimated energy=%.2f J."
-                % (role, rounds, total_energy))
+        print("[%s] Energy round %d: total=%.3f J" %
+              (role, r, energy["total"]))
+
+    print("[%s] Finished %d rounds." % (role, rounds))
 
 
 if __name__ == "__main__":
