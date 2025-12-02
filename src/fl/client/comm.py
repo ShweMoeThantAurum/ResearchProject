@@ -1,78 +1,202 @@
 """
-Communication layer for clients.
+Client-side communication utilities for S3-based model exchange.
 
-Handles:
-    - download of global model from S3
-    - upload of processed local update
-    - upload of metadata
+This module:
+    - Downloads the global model for each round
+    - Uploads the processed client update
+    - Uploads per-round metadata for AEFL selection
 """
 
-import time
 import os
 import json
-import torch
+import time
+import io
+
 import boto3
+import torch
 
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-s3 = boto3.client("s3", region_name=AWS_REGION)
+from src.fl.utils.logger import log_event, Timer
+from src.fl.utils.serialization import save_state_dict_to_path
+from src.fl.client.utils_client import get_dataset_name
 
 
-def _key(dataset, mode, round_id, name):
+def get_s3_client():
     """
-    Build S3 key for FL artifact.
+    Create and return a boto3 S3 client using AWS_REGION from the environment.
     """
-    return "experiments/%s/%s/round_%d/%s" % (dataset, mode, round_id, name)
+    region = os.environ.get("AWS_REGION", "us-east-1")
+    return boto3.client("s3", region_name=region)
 
 
-def download_global_model(bucket, dataset, mode, round_id, timeout=600):
+def get_s3_bucket():
     """
-    Poll S3 until the global model for this round is available.
+    Return the S3 bucket name for federated learning artifacts.
+
+    Reads S3_BUCKET from environment variables, defaults to "aefl".
     """
-    name = "global_model"
-    start = time.time()
+    return os.environ.get("S3_BUCKET", "aefl").strip()
+
+
+def fl_prefix_for_dataset(dataset_name):
+    """
+    Return the S3 key prefix used for a given dataset.
+
+    Example:
+        dataset "sz" uses prefix "fl/sz"
+    """
+    return "fl/%s" % dataset_name
+
+
+def global_model_key(dataset_name, round_id):
+    """
+    Return the S3 key for the global model at a given round.
+    """
+    prefix = fl_prefix_for_dataset(dataset_name)
+    return "%s/round_%d/global.pt" % (prefix, round_id)
+
+
+def client_update_key(dataset_name, round_id, role):
+    """
+    Return the S3 key for a processed client update.
+    """
+    prefix = fl_prefix_for_dataset(dataset_name)
+    return "%s/round_%d/updates/%s.pt" % (prefix, round_id, role)
+
+
+def client_metadata_key(dataset_name, round_id, role):
+    """
+    Return the S3 key for per-round client metadata.
+    """
+    prefix = fl_prefix_for_dataset(dataset_name)
+    return "%s/round_%d/metadata/%s.json" % (prefix, round_id, role)
+
+
+def download_global_model(round_id, role, dataset_name=None):
+    """
+    Download the global model for a specific round and client role.
+
+    Blocks until the object is available on S3.
+
+    Returns:
+        state_dict     : PyTorch state_dict for the global model
+        download_bytes : number of bytes downloaded
+    """
+    if dataset_name is None:
+        dataset_name = get_dataset_name()
+
+    s3 = get_s3_client()
+    bucket = get_s3_bucket()
+    key = global_model_key(dataset_name, round_id)
+
+    local_path = "/tmp/global_%s_round_%d.pt" % (role, round_id)
 
     while True:
+        timer = Timer()
+        timer.start()
         try:
-            obj = s3.get_object(
-                Bucket=bucket,
-                Key=_key(dataset, mode, round_id, name),
-            )
-            data = obj["Body"].read()
+            s3.download_file(bucket, key, local_path)
+            latency = timer.stop()
+            size_bytes = os.path.getsize(local_path)
 
-            tmp = "/tmp/global_%d.pth" % round_id
-            with open(tmp, "wb") as f:
-                f.write(data)
+            log_event("client_s3_download.log", {
+                "role": role,
+                "round": round_id,
+                "latency_sec": latency,
+                "size_bytes": size_bytes,
+                "s3_key": key,
+            })
 
-            return torch.load(tmp, map_location="cpu")
+            print("[%s] Downloaded global model for round %d (size=%.3f MB, latency=%.3fs)"
+                  % (role, round_id, size_bytes / (1024.0 * 1024.0), latency))
+
+            state_dict = torch.load(local_path, map_location="cpu")
+            return state_dict, size_bytes
 
         except Exception:
-            if time.time() - start > timeout:
-                raise TimeoutError("Timeout waiting for global model r=%d" %
-                                   round_id)
-            time.sleep(2)
+            print("[%s] Waiting for global model round %d..." % (role, round_id))
+            time.sleep(3.0)
 
 
-def upload_client_update(bucket, dataset, mode, round_id, role, state_dict):
+def upload_client_update(round_id,
+                         role,
+                         state_dict,
+                         dataset_name=None):
     """
-    Upload a serialized client model update to S3.
-    """
-    tmp = "/tmp/%s_r%d.pth" % (role, round_id)
-    torch.save(state_dict, tmp)
+    Upload a processed client update state_dict to S3.
 
-    with open(tmp, "rb") as f:
-        s3.put_object(
-            Bucket=bucket,
-            Key=_key(dataset, mode, round_id, "%s_update" % role),
-            Body=f.read(),
-        )
+    Returns:
+        size_bytes : uploaded payload size in bytes
+        latency    : upload latency in seconds
+    """
+    if dataset_name is None:
+        dataset_name = get_dataset_name()
+
+    s3 = get_s3_client()
+    bucket = get_s3_bucket()
+    key = client_update_key(dataset_name, round_id, role)
+
+    local_path = "/tmp/update_%s_round_%d.pt" % (role, round_id)
+    save_state_dict_to_path(state_dict, local_path)
+
+    size_bytes = os.path.getsize(local_path)
+
+    timer = Timer()
+    timer.start()
+    s3.upload_file(local_path, bucket, key)
+    latency = timer.stop()
+
+    log_event("client_s3_upload.log", {
+        "role": role,
+        "round": round_id,
+        "latency_sec": latency,
+        "size_bytes": size_bytes,
+        "s3_key": key,
+    })
+
+    print("[%s] Uploaded processed update for round %d (size=%.3f MB, latency=%.3fs)"
+          % (role, round_id, size_bytes / (1024.0 * 1024.0), latency))
+
+    return size_bytes, latency
 
 
-def upload_client_metadata(bucket, dataset, mode, round_id, role, metadata):
+def upload_client_metadata(round_id,
+                           role,
+                           meta,
+                           dataset_name=None):
     """
-    Upload per-round client metadata as JSON.
+    Upload client metadata as a small JSON document to S3.
+
+    Metadata includes:
+        - energy statistics
+        - communication volume
+        - training loss and samples
+        - bandwidth estimate
     """
-    s3.put_object(
-        Bucket=bucket,
-        Key=_key(dataset, mode, round_id, "%s_metadata.json" % role),
-        Body=json.dumps(metadata).encode("utf-8"),
-    )
+    if dataset_name is None:
+        dataset_name = get_dataset_name()
+
+    s3 = get_s3_client()
+    bucket = get_s3_bucket()
+    key = client_metadata_key(dataset_name, round_id, role)
+
+    body = json.dumps(meta).encode("utf-8")
+
+    timer = Timer()
+    timer.start()
+    s3.put_object(Bucket=bucket, Key=key, Body=body)
+    latency = timer.stop()
+
+    log_event("client_meta_upload.log", {
+        "role": role,
+        "round": round_id,
+        "latency_sec": latency,
+        "size_bytes": len(body),
+        "s3_key": key,
+    })
+
+    bw_mbps = meta.get("bandwidth_mbps", 0.0)
+
+    print("[%s] Uploaded metadata for round %d: bandwidth=%.3f Mb/s, total_energy=%.2f J"
+          % (role, round_id, bw_mbps, meta.get("total_energy_j", 0.0)))
+
+    return latency
