@@ -1,48 +1,26 @@
 """
-Central loader for preprocessed dataset tensors and role-specific partitions.
-Used by both server and clients during FL execution.
+Data loading utilities for global and per-client datasets.
+Handles reading processed tensors and preparing batches for GRU models.
 """
 
 import os
 import torch
 
-from .partition import partition_clients, create_dataloaders, ROLES
-
-
-def load_preprocessed(dataset):
-    """Load a preprocessed dataset tensor."""
-    path = os.path.join("datasets", "processed", f"{dataset}.pt")
+def load_tensor(path):
+    """Loads a PyTorch tensor saved with torch.save."""
     if not os.path.exists(path):
-        raise FileNotFoundError(f"Preprocessed dataset not found: {path}")
-    return torch.load(path, map_location="cpu")
+        raise FileNotFoundError("Tensor file not found: " + path)
+    return torch.load(path)
 
+def load_global_splits(base_dir):
+    """Loads train, val, test splits from datasets/processed/<dataset>/global/."""
+    d = os.path.join(base_dir, "global")
+    train = load_tensor(os.path.join(d, "train.pt"))
+    val = load_tensor(os.path.join(d, "val.pt"))
+    test = load_tensor(os.path.join(d, "test.pt"))
+    return train, val, test
 
-def infer_num_nodes(tensor):
-    """Infer the number of nodes from a preprocessed tensor."""
-    return tensor.shape[-1]
-
-
-def load_client_partition(dataset, role, batch_size):
-    """Load train/test loaders for a specific role."""
-    tensor = load_preprocessed(dataset)
-    num_nodes = infer_num_nodes(tensor)
-
-    per_role = partition_clients(tensor, num_nodes)
-
-    if role not in per_role:
-        raise ValueError(f"Unknown role: {role}")
-
-    train_loader, test_loader = create_dataloaders(per_role[role], batch_size)
-    return train_loader, test_loader, num_nodes
-
-
-def load_test_loader_for_server(dataset, batch_size):
-    """Load global test loader for server-side evaluation."""
-    tensor = load_preprocessed(dataset)
-    num_nodes = infer_num_nodes(tensor)
-
-    # Use roadside role test set as evaluation baseline
-    per_role = partition_clients(tensor, num_nodes)
-    _, test_loader = create_dataloaders(per_role["roadside"], batch_size)
-
-    return test_loader, num_nodes
+def load_client_data(base_dir, role):
+    """Loads a single client partition such as roadside.pt."""
+    path = os.path.join(base_dir, role + ".pt")
+    return load_tensor(path)
