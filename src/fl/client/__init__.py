@@ -1,7 +1,8 @@
 """
-Client package for federated learning experiments.
+Client package initializer.
 
-Exposes the main entrypoint that each Docker client container runs.
+Exposes the main federated learning client entrypoint that is used
+inside Docker containers.
 """
 
 from .client_main import run_client
