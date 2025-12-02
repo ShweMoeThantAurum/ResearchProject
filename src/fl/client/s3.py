@@ -1,9 +1,8 @@
 """
-Client-side S3 utilities:
-- Download global model
-- Upload RAW model update (for Lambda offload)
-- Upload FINALūr processed update (if Lambda is disabled)
-- Upload metadata
+Client-side S3 communication utilities.
+
+Handles downloading global models, uploading processed updates,
+and writing metadata to the correct S3 keys for each round.
 """
 
 import os
@@ -25,34 +24,33 @@ s3 = boto3.client("s3", region_name=AWS_REGION)
 
 
 # ---------------------------------------------------------------------
-# S3 key helpers
+# Key helpers
 # ---------------------------------------------------------------------
-
-def global_key(round_id: int) -> str:
+def global_key(round_id):
+    """S3 key for the global model of a given round."""
     return f"{PREFIX}/round_{round_id}/global.pt"
 
 
-def raw_update_key(round_id: int, role: str) -> str:
+def raw_update_key(round_id, role):
+    """Key for raw updates (if Lambda offload were enabled)."""
     return f"{PREFIX}/round_{round_id}/raw_updates/{role}.pt"
 
 
-def processed_update_key(round_id: int, role: str) -> str:
+def processed_update_key(round_id, role):
+    """Key for final processed (DP/compressed) updates."""
     return f"{PREFIX}/round_{round_id}/updates/{role}.pt"
 
 
-def metadata_key(round_id: int, role: str) -> str:
+def metadata_key(round_id, role):
+    """Key for client metadata JSON."""
     return f"{PREFIX}/round_{round_id}/metadata/{role}.json"
 
 
 # ---------------------------------------------------------------------
 # Download global model
 # ---------------------------------------------------------------------
-
-def download_global(round_id: int, role: str) -> Tuple[str, int]:
-    """
-    Waits until the server uploads the global model for this round.
-    Downloads it into /tmp and returns (local_path, num_bytes).
-    """
+def download_global(round_id, role):
+    """Block until the server uploads the global model for this round."""
     key = global_key(round_id)
     local_path = f"/tmp/global_{role}_round_{round_id}.pt"
 
@@ -84,16 +82,10 @@ def download_global(round_id: int, role: str) -> Tuple[str, int]:
 
 
 # ---------------------------------------------------------------------
-# Upload RAW update (for Lambda offload)
+# Upload RAW update (unused in your pipeline)
 # ---------------------------------------------------------------------
-
-def upload_raw_update(round_id: int, role: str, state_dict: dict) -> Tuple[int, float]:
-    """
-    Saves the uncompressed, non-DP, raw update locally and uploads to:
-      fl/<dataset>/round_r/raw_updates/<role>.pt
-
-    This is used ONLY when Lambda offloading is enabled.
-    """
+def upload_raw_update(round_id, role, state_dict):
+    """Upload unprocessed raw update (Lambda mode only; unused here)."""
     local_path = f"/tmp/raw_update_{role}_round_{round_id}.pt"
     torch.save(state_dict, local_path)
 
@@ -123,16 +115,10 @@ def upload_raw_update(round_id: int, role: str, state_dict: dict) -> Tuple[int, 
 
 
 # ---------------------------------------------------------------------
-# Upload PROCESSED update (when Lambda is OFF)
+# Upload processed update
 # ---------------------------------------------------------------------
-
-def upload_processed_update(round_id: int, role: str, state_dict: dict) -> Tuple[int, float]:
-    """
-    Uploads the (compressed/DP) processed update to:
-      fl/<dataset>/round_r/updates/<role>.pt
-
-    This is used when Lambda offloading is NOT enabled.
-    """
+def upload_processed_update(round_id, role, state_dict):
+    """Upload the compressed/DP-processed update for this round."""
     local_path = f"/tmp/update_{role}_round_{round_id}.pt"
     torch.save(state_dict, local_path)
 
@@ -164,11 +150,8 @@ def upload_processed_update(round_id: int, role: str, state_dict: dict) -> Tuple
 # ---------------------------------------------------------------------
 # Upload metadata
 # ---------------------------------------------------------------------
-
-def upload_metadata(round_id: int, role: str, meta: dict):
-    """
-    Uploads metadata containing energy, communication, bandwidth.
-    """
+def upload_metadata(round_id, role, meta):
+    """Upload metadata JSON containing energy, communication and training stats."""
     key = metadata_key(round_id, role)
     body = json.dumps(meta).encode("utf-8")
 

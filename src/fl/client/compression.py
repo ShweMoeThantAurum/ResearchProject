@@ -1,4 +1,9 @@
-"""Optional lightweight local model compression for communication cost modelling."""
+"""
+Local compression utilities applied before uploading updates.
+
+Wraps sparsification, top-k selection, and 8-bit quantisation provided
+by src.utils.compression.
+"""
 
 import os
 import torch
@@ -11,21 +16,8 @@ from src.utils.compression import (
 )
 
 
-def maybe_compress(state_dict: Dict[str, torch.Tensor]) -> Tuple[Dict, float, int]:
-    """
-    Optionally apply compression to the model update before upload.
-
-    Compression modes (controlled by env vars):
-      - sparsify : zero out a fraction of weights
-      - topk : keep top-k magnitude parameters
-      - q8 : 8-bit quantisation
-      - disabled : return dense weights unchanged
-
-    Returns:
-        compressed_state : dict
-        kept_ratio : fraction of weights kept
-        payload_bytes : estimated payload size for energy computation
-    """
+def maybe_compress(state_dict):
+    """Optionally compress the state_dict according to env settings."""
     enabled = os.environ.get("COMPRESSION_ENABLED", "false").lower() == "true"
     if not enabled:
         return state_dict, 1.0, dense_state_size_bytes(state_dict)
@@ -44,4 +36,3 @@ def maybe_compress(state_dict: Dict[str, torch.Tensor]) -> Tuple[Dict, float, in
         return quantize8_state(state_dict)
 
     return state_dict, 1.0, dense_state_size_bytes(state_dict)
-    

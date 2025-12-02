@@ -1,46 +1,82 @@
-"""Client-side energy estimation for communication and computation."""
+"""
+Energy estimation utilities for FL clients.
+
+Adds:
+- FLOPs-based compute estimation
+- Separate upload/download communication energy
+"""
 
 from src.fl.logger import log_event
+from src.utils.flops import estimate_gru_flops
 
 
-def estimate_round_energy(role: str,
-                          round_id: int,
-                          train_time_sec: float,
-                          download_bytes: int,
-                          upload_bytes: int,
-                          device_power_watts: float,
-                          net_j_per_mb: float):
-    """
-    Estimate energy consumption for one FL round.
+ENERGY_PER_FLOP_J = 1e-9  # 1 nJ per FLOP (reasonable academic assumption)
 
-    Uses:
-      - compute energy = power * time
-      - communication energy = J/MB * transferred_MB
-    """
-    compute_j = device_power_watts * train_time_sec
 
-    total_bytes = download_bytes + upload_bytes
-    mb = total_bytes / (1024 * 1024)
-    comm_j = net_j_per_mb * mb
+def estimate_round_energy(
+    role,
+    round_id,
+    train_time_sec,
+    download_bytes,
+    upload_bytes,
+    device_power_watts,
+    net_j_per_mb,
+    num_nodes=None,
+    hidden_size=None,
+    seq_len=12
+):
+    """Estimate compute + communication energy for one round."""
 
-    total_j = compute_j + comm_j
+    # ===== Compute energy (time-based) =====
+    compute_j_time = device_power_watts * train_time_sec
+
+    # ===== Compute energy (FLOPs-based) =====
+    if num_nodes is not None and hidden_size is not None:
+        flops = estimate_gru_flops(num_nodes, hidden_size, seq_len)
+        compute_j_flops = flops * ENERGY_PER_FLOP_J
+    else:
+        flops = 0
+        compute_j_flops = 0
+
+    # ===== Communication energy =====
+    download_mb = download_bytes / (1024 * 1024)
+    upload_mb = upload_bytes / (1024 * 1024)
+
+    comm_j_download = net_j_per_mb * download_mb
+    comm_j_upload = net_j_per_mb * upload_mb
+    comm_j_total = comm_j_download + comm_j_upload
+
+    total_energy = compute_j_time + comm_j_total
 
     record = {
         "role": role,
         "round": round_id,
-        "train_time_sec": train_time_sec,
+
+        # compute energy
+        "compute_j_time": compute_j_time,
+        "compute_j_flops": compute_j_flops,
+
+        # communication energy
         "download_bytes": download_bytes,
         "upload_bytes": upload_bytes,
-        "download_mb": download_bytes / (1024 * 1024),
-        "upload_mb": upload_bytes / (1024 * 1024),
-        "compute_j": compute_j,
-        "comm_j": comm_j,
-        "total_j": total_j,
+        "download_mb": download_mb,
+        "upload_mb": upload_mb,
+        "comm_j_download": comm_j_download,
+        "comm_j_upload": comm_j_upload,
+        "comm_j_total": comm_j_total,
+
+        "FLOPs": flops,
+        "total_energy_j": total_energy,
     }
 
     log_event("client_energy.log", record)
 
-    print(f"[{role}] Energy round {round_id}: compute={compute_j:.2f} J, "
-          f"comm={comm_j:.2f} J, total={total_j:.2f} J")
+    print(
+        f"[{role}] Energy round {round_id}: "
+        f"compute_time={compute_j_time:.2f} J, "
+        f"compute_flops={compute_j_flops:.6f} J, "
+        f"comm_total={comm_j_total:.4f} J, "
+        f"total={total_energy:.4f} J"
+    )
 
     return record

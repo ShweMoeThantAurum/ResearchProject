@@ -1,32 +1,26 @@
-"""Client-side local model training, including FedProx support."""
+"""
+Local training logic for federated learning clients.
+
+Supports FedAvg, AEFL, LocalOnly, and FedProx (via proximal term).
+"""
 
 import torch
 from torch.utils.data import DataLoader
 from src.fl.logger import log_event, Timer
 
-FEDPROX_MU = 0.01  # constant proximal term coefficient
+FEDPROX_MU = 0.01  # coefficient for FedProx proximal term
 
 
-def train_one_round(model: torch.nn.Module,
-                    loader: DataLoader,
-                    role: str,
-                    round_id: int,
-                    device: str,
-                    local_epochs: int,
-                    lr: float,
-                    mode: str,
+def train_one_round(model,
+                    loader,
+                    role,
+                    round_id,
+                    device,
+                    local_epochs,
+                    lr,
+                    mode,
                     global_state=None):
-    """
-    Train the model locally for a single federated learning round.
-
-    Supports:
-      - AEFL (same as FedAvg)
-      - FedAvg
-      - FedProx (adds proximal term)
-      - LocalOnly (standard local training)
-
-    Returns the updated state_dict, training duration, mean loss, and sample count.
-    """
+    """Train the local model for one federated learning round."""
     timer = Timer()
     timer.start()
 
@@ -35,7 +29,7 @@ def train_one_round(model: torch.nn.Module,
     loss_fn = torch.nn.MSELoss()
     use_prox = (mode.lower() == "fedprox") and (global_state is not None)
 
-    # Prepare global parameters for FedProx
+    # Extract global parameters for FedProx
     global_params = None
     if use_prox:
         global_params = [global_state[k].to(device) for k in model.state_dict().keys()]
@@ -46,13 +40,13 @@ def train_one_round(model: torch.nn.Module,
 
     for _ in range(local_epochs):
         for x, y in loader:
-            x = x.to(device)
-            y = y.to(device)
+            x, y = x.to(device), y.to(device)
 
             opt.zero_grad()
             pred = model(x)
             loss = loss_fn(pred, y)
 
+            # FedProx proximal term
             if use_prox:
                 prox_term = 0.0
                 for p, g0 in zip(model.parameters(), global_params):

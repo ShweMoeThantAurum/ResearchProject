@@ -1,4 +1,9 @@
-"""Final evaluation of the global model using the test dataset."""
+"""
+Final evaluation of the global model using the test dataset.
+
+Loads X_test and y_test, runs the GRU model, and computes final accuracy
+metrics (MAE, RMSE, MAPE).
+"""
 
 import os
 import torch
@@ -6,15 +11,11 @@ import numpy as np
 from torch.utils.data import TensorDataset, DataLoader
 
 from src.models.simple_gru import SimpleGRU
-from src.utils.metrics import mae, rmse, mape, smape, r2_score
+from src.utils.metrics import mae, rmse, mape
 
 
-def load_test_dataset(proc_dir: str):
-    """
-    Load X_test.npy and y_test.npy as a DataLoader.
-
-    Used to evaluate the final global model after all FL rounds.
-    """
+def load_test_dataset(proc_dir):
+    """Load X_test.npy and y_test.npy as a DataLoader."""
     X_path = os.path.join(proc_dir, "X_test.npy")
     y_path = os.path.join(proc_dir, "y_test.npy")
 
@@ -22,18 +23,17 @@ def load_test_dataset(proc_dir: str):
         raise FileNotFoundError(f"Missing X_test or y_test in {proc_dir}")
 
     X = np.load(X_path)
-    y = np.load(y_path)
+    Y = np.load(y_path)
 
-    ds = TensorDataset(torch.from_numpy(X).float(), torch.from_numpy(y).float())
+    ds = TensorDataset(
+        torch.from_numpy(X).float(),
+        torch.from_numpy(Y).float()
+    )
     return DataLoader(ds, batch_size=64, shuffle=False)
 
 
-def evaluate_final_model(global_state, proc_dir: str, num_nodes: int, hidden_size: int):
-    """
-    Evaluate the global model on the complete test set.
-
-    Returns MAE, RMSE, MAPE, sMAPE, and R2 scores.
-    """
+def evaluate_final_model(global_state, proc_dir, num_nodes, hidden_size):
+    """Evaluate the final global model on the test set and return metrics."""
     model = SimpleGRU(num_nodes=num_nodes, hidden_size=hidden_size).cpu()
     model.load_state_dict(global_state)
     model.eval()
@@ -59,11 +59,4 @@ def evaluate_final_model(global_state, proc_dir: str, num_nodes: int, hidden_siz
         "MAE": mae(preds_t, trues_t),
         "RMSE": rmse(preds_t, trues_t),
         "MAPE": mape(preds_t, trues_t),
-        "sMAPE": smape(preds_t, trues_t),
-        "R2": r2_score(preds_t, trues_t),
     }
-
-
-def evaluate_final_global_model(global_state, proc_dir: str, num_nodes: int, hidden_size: int):
-    """Compatibility wrapper."""
-    return evaluate_final_model(global_state, proc_dir, num_nodes, hidden_size)

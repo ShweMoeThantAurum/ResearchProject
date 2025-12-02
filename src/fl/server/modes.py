@@ -1,28 +1,28 @@
-"""Helpers determining which FL mode (AEFL/FedAvg/FedProx/LocalOnly) is active."""
+"""
+Helpers for determining which FL mode the server is running in.
+
+Provides simple boolean checks for AEFL, FedAvg, FedProx, and LocalOnly.
+"""
 
 import os
 
 
 def get_mode():
-    """
-    Return the active FL mode in lowercase.
-    Defaults to AEFL.
-    """
-    mode = os.environ.get("FL_MODE", "AEFL").strip().lower()
-    return mode
+    """Return the active FL mode in lowercase."""
+    return os.environ.get("FL_MODE", "AEFL").strip().lower()
 
 
-def is_aefl(mode: str):
+def is_aefl(mode):
     return mode.lower() == "aefl"
 
 
-def is_fedavg(mode: str):
+def is_fedavg(mode):
     return mode.lower() == "fedavg"
 
 
-def is_fedprox(mode: str):
+def is_fedprox(mode):
     return mode.lower() == "fedprox"
 
 
-def is_localonly(mode: str):
+def is_localonly(mode):
     return mode.lower() == "localonly"

@@ -1,14 +1,9 @@
 """
-Client main loop for cloud-based federated learning (Lambda-free version).
+Main client loop for cloud-based federated learning.
 
-Responsibilities:
-- Load local data and hyperparameters
-- Download global model each round
-- Train locally
-- Apply local DP + compression
-- Upload processed update directly to S3
-- Estimate per-round energy
-- Upload metadata
+Each client downloads the global model, trains locally, applies optional
+DP and compression, uploads the processed update, logs energy usage, and
+stores metadata for server-side adaptive selection.
 """
 
 import os
@@ -33,24 +28,20 @@ from src.fl.client.energy import estimate_round_energy
 from src.fl.client.meta import build_round_metadata
 from src.fl.client.modes import get_client_mode, client_allows_training
 
-# S3 interactions
 from src.fl.client.s3 import (
     download_global,
     upload_processed_update,
     upload_metadata,
 )
 
-# Local DP + compression
 from src.fl.client.privacy import maybe_add_dp_noise
 from src.fl.client.compression import maybe_compress
 
 
 def main():
-    """Main client training loop executed inside each Docker container."""
-
+    """Run the client training sequence for all federated rounds."""
     role = os.environ.get("CLIENT_ROLE", "roadside")
 
-    # Directories / hyperparameters
     proc_dir = get_proc_dir()
     fl_rounds = get_fl_rounds()
     batch_size = get_batch_size()
@@ -58,13 +49,12 @@ def main():
     lr = get_lr()
     hidden_size = get_hidden_size()
 
-    # Device power model for energy calculation
     device_power_watts = float(os.environ.get("DEVICE_POWER_WATTS", "3.5"))
     net_j_per_mb = float(os.environ.get("NET_J_PER_MB", "0.6"))
 
     device = "cpu"
 
-    # Infer number of nodes
+    # Infer graph dimensionality
     x_train_path = os.path.join(proc_dir, "X_train.npy")
     if not os.path.exists(x_train_path):
         raise FileNotFoundError(f"Missing {x_train_path}. Did you run preprocessing?")
@@ -76,10 +66,8 @@ def main():
         f"nodes={num_nodes}, rounds={fl_rounds}"
     )
 
-    # Cleanup temp files
     cleanup_local_tmp(role)
 
-    # Load local dataset
     loader = load_local_data(
         proc_dir=proc_dir,
         role=role,
@@ -89,28 +77,21 @@ def main():
         lr=lr,
     )
 
-    # Build local model
     model = SimpleGRU(num_nodes=num_nodes, hidden_size=hidden_size).to(device)
     total_energy_j = 0.0
 
     print(f"[{role}] Lambda offload disabled (local only)")
 
-    # ============================================================
-    # Federated Rounds
-    # ============================================================
+    # Federated rounds
     for r in range(1, fl_rounds + 1):
         print(f"\n[{role}] ===== ROUND {r} =====")
 
-        # --------------------------------------------------------
-        # 1. Download global model
-        # --------------------------------------------------------
+        # Download global model
         global_path, dl_bytes = download_global(r, role)
         global_state = torch.load(global_path, map_location=device)
         model.load_state_dict(global_state)
 
-        # --------------------------------------------------------
-        # 2. Local training
-        # --------------------------------------------------------
+        # Train locally
         if not client_allows_training(mode):
             updated_state = {k: v.cpu() for k, v in model.state_dict().items()}
             train_time = 0.0
@@ -135,18 +116,13 @@ def main():
                 global_state=prox_ref_state,
             )
 
-        # --------------------------------------------------------
-        # 3. LOCAL DP + LOCAL COMPRESSION ONLY
-        # --------------------------------------------------------
+        # DP noise → Compression
         dp_state = maybe_add_dp_noise(updated_state)
         comp_state, kept_ratio, modeled_bytes = maybe_compress(dp_state)
 
-        # Upload compressed/DP-processed update
         processed_bytes, up_latency = upload_processed_update(r, role, comp_state)
 
-        # --------------------------------------------------------
-        # 4. Energy estimation
-        # --------------------------------------------------------
+        # Energy estimation
         energy_record = estimate_round_energy(
             role=role,
             round_id=r,
@@ -155,13 +131,16 @@ def main():
             upload_bytes=processed_bytes,
             device_power_watts=device_power_watts,
             net_j_per_mb=net_j_per_mb,
+            num_nodes=num_nodes,
+            hidden_size=hidden_size,
+            seq_len=12,
         )
 
-        total_energy_j += energy_record["total_j"]
 
-        # --------------------------------------------------------
-        # 5. Upload metadata
-        # --------------------------------------------------------
+        total_energy_j += energy_record["total_energy_j"]
+
+
+        # Metadata upload
         meta = build_round_metadata(
             role=role,
             round_id=r,
@@ -173,9 +152,7 @@ def main():
         )
         upload_metadata(r, role, meta)
 
-    # ============================================================
-    # End of training
-    # ============================================================
+    # Final summary
     log_event(
         "client_energy_summary.log",
         {

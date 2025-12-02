@@ -1,4 +1,8 @@
-"""Allows running the FL server via: python -m src.fl.server"""
+"""
+Allows running the FL server as a module:
+
+    python -m src.fl.server
+"""
 
 from .main import main
 

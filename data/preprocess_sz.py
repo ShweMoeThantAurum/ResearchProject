@@ -1,4 +1,9 @@
-"""Preprocess SZ-Taxi dataset, generate train/val/test arrays, and create FL client splits."""
+"""
+Preprocessing pipeline for the SZ-Taxi dataset.
+
+Downloads raw CSVs from S3 if missing, prepares local arrays, and
+creates federated client partitions mapped to IoT roles.
+"""
 
 import os
 import boto3
@@ -11,7 +16,7 @@ s3 = boto3.client("s3")
 
 
 def download_from_s3(raw_dir):
-    """Ensure SZ raw CSVs exist locally by downloading from S3 if missing."""
+    """Download SZ-Taxi raw CSV files if missing."""
     os.makedirs(raw_dir, exist_ok=True)
     files = ["sz_speed.csv", "sz_adj.csv"]
 
@@ -32,17 +37,17 @@ def preprocess_and_split(raw_dir="data/raw/sz",
                          noniid=False,
                          imbalance=0.4,
                          seed=42):
-    """Convert SZ raw CSVs into prepared arrays, then create and rename client partitions."""
+    """Create client splits for SZ-Taxi data (preprocessed offline)."""
     download_from_s3(raw_dir)
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"Preprocessing SZ-Taxi data into {out_dir}...")
 
-    # Client partitions (actual preprocessing omitted here — raw SZ preprocessed earlier)
+    # Dataset is already preprocessed externally
     build_client_datasets(out_dir, num_clients, noniid, imbalance, seed)
 
-    # Rename numeric clients → IoT role identifiers
-    print("\nRenaming client partitions to semantic IoT roles...")
+    # Rename numeric clients → IoT role names
+    print("\nRenaming client partitions to IoT roles...")
 
     role_map = {
         0: "roadside",
@@ -67,7 +72,7 @@ def preprocess_and_split(raw_dir="data/raw/sz",
 
         print(f"Renamed client {idx} → {role}")
 
-    print(f"\nCompleted preprocessing. Final partition dir: {clients_dir}")
+    print(f"\nCompleted preprocessing. Final client directory: {clients_dir}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,9 @@
-"""Defines client-side behaviour depending on the chosen FL mode."""
+"""
+Client mode utilities for federated learning.
+
+Determines the selected FL mode (AEFL, FedAvg, FedProx, LocalOnly)
+based on environment variables.
+"""
 
 import os
 
@@ -6,11 +11,7 @@ VALID_MODES = ["AEFL", "FedAvg", "FedProx", "LocalOnly"]
 
 
 def get_client_mode():
-    """
-    Return the federated learning mode for this client.
-
-    Reads FL_MODE from the environment and defaults to AEFL.
-    """
+    """Return the current FL mode from environment variables."""
     mode = os.environ.get("FL_MODE", "AEFL").strip()
     if mode not in VALID_MODES:
         print(f"[CLIENT] WARNING: invalid FL_MODE='{mode}', using AEFL.")
@@ -18,10 +19,6 @@ def get_client_mode():
     return mode
 
 
-def client_allows_training(mode: str):
-    """
-    Determine if the client should perform local training.
-
-    All modes currently allow training (LocalOnly training is still performed).
-    """
+def client_allows_training(mode):
+    """Return True if training should occur for the given mode."""
     return True

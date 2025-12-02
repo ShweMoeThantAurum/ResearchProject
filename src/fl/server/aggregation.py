@@ -1,16 +1,17 @@
-"""Aggregation strategies for cloud-based federated learning."""
+"""
+Aggregation strategies for server-side model updates.
+
+FedAvg = uniform average
+FedProx = same as FedAvg (server side)
+AEFL = weighted aggregation using selection scores
+"""
 
 from typing import Dict
 import torch
 
 
-def aggregate_fedavg(states: Dict[str, dict]):
-    """
-    Perform FedAvg aggregation by averaging model parameters across clients.
-
-    The states dict maps client roles to state_dicts. All tensors must
-    have identical shapes. This is the standard unweighted mean.
-    """
+def aggregate_fedavg(states):
+    """Average all client model parameters equally."""
     if not states:
         return {}
 
@@ -21,33 +22,55 @@ def aggregate_fedavg(states: Dict[str, dict]):
     for name in base.keys():
         tensors = [states[r][name].float() for r in roles]
         avg[name] = sum(tensors) / float(len(tensors))
-
     return avg
 
 
-def aggregate_aefl(states: Dict[str, dict]):
-    """
-    AEFL aggregation currently mirrors FedAvg.
-
-    The adaptivity of AEFL is implemented in the client selection stage,
-    not in weighted parameter averaging.
-    """
+def aggregate_fedprox(states):
+    """FedProx uses FedAvg server-side."""
     return aggregate_fedavg(states)
 
 
-def aggregate_fedprox(states: Dict[str, dict]):
+def aggregate_aefl(states, scores):
     """
-    FedProx uses a proximal local objective but aggregates globally the same
-    way as FedAvg in the canonical formulation.
+    AEFL weighted aggregation based on selection scores.
+
+    Args:
+        states (dict): role -> state_dict
+        scores (dict): role -> AEFL selection score
+
+    Returns:
+        aggregated state_dict
     """
+    if not states:
+        return {}
+
+    # Normalise AEFL scores
+    roles = list(states.keys())
+    raw_scores = {r: scores.get(r, 1.0) for r in roles}
+
+    total = sum(raw_scores.values()) or 1
+    weights = {r: raw_scores[r] / total for r in roles}
+
+    base_role = roles[0]
+    base_state = states[base_role]
+
+    aggregated = {}
+
+    for name in base_state.keys():
+        tensors = []
+        for r in roles:
+            t = states[r][name].float() * weights[r]
+            tensors.append(t)
+
+        aggregated[name] = sum(tensors)
+
+    return aggregated
+
+
+# Deprecated aliases
+def fedavg_aggregate(states):
     return aggregate_fedavg(states)
 
 
-# --- Compatibility aliases (older imports) ---
-
-def fedavg_aggregate(states: Dict[str, dict]):
-    return aggregate_fedavg(states)
-
-
-def aefl_aggregate(states: Dict[str, dict], scores=None):
-    return aggregate_aefl(states)
+def aefl_aggregate(states, scores=None):
+    return aggregate_aefl(states, scores)

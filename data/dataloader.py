@@ -1,4 +1,7 @@
-"""Split preprocessed datasets into per-client partitions for federated learning."""
+"""
+Utilities for loading preprocessed arrays and partitioning nodes into
+client-specific datasets for federated learning.
+"""
 
 import os
 import json
@@ -6,10 +9,7 @@ import numpy as np
 
 
 def load_prepared_data(proc_dir):
-    """
-    Load preprocessed arrays (X_train/valid/test, y_train/valid/test)
-    from <proc_dir>.
-    """
+    """Load preprocessed X/y splits (train/valid/test) from a directory."""
     data = {}
     for split in ["train", "valid", "test"]:
         Xp = os.path.join(proc_dir, f"X_{split}.npy")
@@ -21,10 +21,7 @@ def load_prepared_data(proc_dir):
 
 
 def split_clients_by_nodes(num_nodes, num_clients, noniid=False, imbalance_factor=0.4, seed=42):
-    """
-    Split node indices among clients (IID or Non-IID distribution).
-    Non-IID is created by sampling a Dirichlet distribution.
-    """
+    """Split node indices among clients (IID or Non-IID using Dirichlet sampling)."""
     rng = np.random.default_rng(seed)
     all_nodes = np.arange(num_nodes)
 
@@ -50,7 +47,7 @@ def split_clients_by_nodes(num_nodes, num_clients, noniid=False, imbalance_facto
 def build_client_datasets(proc_dir, num_clients=5, noniid=False,
                           imbalance_factor=0.4, seed=42, save_dir=None):
     """
-    Generate and save per-client datasets under:
+    Generate client-partitioned datasets under:
         <proc_dir>/clients/client_<role>_X.npy
         <proc_dir>/clients/client_<role>_y.npy
     """

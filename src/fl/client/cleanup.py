@@ -1,17 +1,16 @@
-"""Client-side cleanup utilities for removing stale temporary files."""
+"""
+Cleanup utilities for removing stale temporary files created by past runs.
+
+Ensures each federated learning round begins with a clean local state.
+"""
 
 import glob
 import os
 from src.fl.logger import log_event
 
 
-def cleanup_local_tmp(role: str):
-    """
-    Remove temporary FL files from previous runs for the given client role.
-
-    Deletes local /tmp/global_<role>_*.pt and /tmp/update_<role>_*.pt files
-    to ensure that each new run starts clean.
-    """
+def cleanup_local_tmp(role):
+    """Remove old cached global/update files for this client role."""
     patterns = [
         f"/tmp/global_{role}_round_*.pt",
         f"/tmp/update_{role}_round_*.pt",
