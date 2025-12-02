@@ -1,40 +1,19 @@
 """
-Data subpackage for federated learning.
+Dataset utilities for preprocessing, loading, and partitioning traffic datasets.
 
-Contains:
-    - loader      : load global arrays and client partitions
-    - partition   : create client splits from global data
-    - preprocess  : dataset-specific preprocessing pipelines
+Modules:
+    - preprocess: cleaning, normalization, sliding windows
+    - loader: dataset loaders for training/evaluation
+    - partition: create client-specific shards for FL
 """
 
-from .loader import (
-    get_processed_dir,
-    load_global_arrays,
-    get_num_nodes,
-    load_client_partition,
-)
-
-from .partition import (
-    split_clients_by_nodes,
-    build_client_datasets,
-)
-
-from .preprocess import (
-    preprocess_dataset,
-    preprocess_pems08,
-    preprocess_los_loop,
-    preprocess_sz_taxi,
-)
+from .preprocess import preprocess_dataset
+from .loader import TrafficDataset, load_dataset
+from .partition import partition_non_iid
 
 __all__ = [
-    "get_processed_dir",
-    "load_global_arrays",
-    "get_num_nodes",
-    "load_client_partition",
-    "split_clients_by_nodes",
-    "build_client_datasets",
     "preprocess_dataset",
-    "preprocess_pems08",
-    "preprocess_los_loop",
-    "preprocess_sz_taxi",
+    "TrafficDataset",
+    "load_dataset",
+    "partition_non_iid",
 ]

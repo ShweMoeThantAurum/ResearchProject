@@ -1,116 +1,56 @@
 """
-Dataset loading utilities for federated learning experiments.
+Dataset loader and PyTorch wrapper for traffic prediction.
 
-This module handles:
-    - Loading global train/validation/test arrays from disk
-    - Inspecting dataset metadata (number of nodes, shapes)
-    - Loading per-client partitions created by the partition module
+Used by both clients (local training) and server (final evaluation).
 """
 
-import os
 import numpy as np
+import torch
+from torch.utils.data import Dataset
 
 
-def get_processed_dir(dataset_name):
+class TrafficDataset(Dataset):
     """
-    Return the processed dataset directory for the given dataset name.
+    PyTorch-compatible dataset wrapping preprocessed sliding window data.
 
-    Example:
-        dataset_name = "sz"
-        -> "datasets/processed/sz"
+    Attributes:
+        X: numpy input sequences [N, seq_len, num_nodes]
+        y: numpy targets [N, num_nodes]
     """
-    return os.path.join("datasets", "processed", dataset_name)
+
+    def __init__(self, X, y):
+        """Store already-preprocessed arrays."""
+        self.X = torch.tensor(X, dtype=torch.float32)
+        self.y = torch.tensor(y, dtype=torch.float32)
+
+    def __len__(self):
+        """Return dataset size."""
+        return len(self.X)
+
+    def __getitem__(self, idx):
+        """Return a single (input, target) pair."""
+        return self.X[idx], self.y[idx]
 
 
-def load_global_arrays(proc_dir):
+def load_dataset(proc_dir, client_role=None):
     """
-    Load global train/validation/test arrays from a processed directory.
+    Load preprocessed data for either:
+        - global evaluation (client_role=None)
+        - a specific client partition (client_role="vehicle", etc.)
 
-    Expects files:
-        X_train.npy, y_train.npy
-        X_valid.npy, y_valid.npy
-        X_test.npy,  y_test.npy
-
-    Returns a dictionary:
-        {
-            "X_train": np.ndarray,
-            "y_train": np.ndarray,
-            "X_valid": np.ndarray,
-            "y_valid": np.ndarray,
-            "X_test":  np.ndarray,
-            "y_test":  np.ndarray,
-        }
-    """
-    splits = ["train", "valid", "test"]
-    data = {}
-
-    for split in splits:
-        x_path = os.path.join(proc_dir, "X_%s.npy" % split)
-        y_path = os.path.join(proc_dir, "y_%s.npy" % split)
-
-        if not os.path.exists(x_path) or not os.path.exists(y_path):
-            raise FileNotFoundError("Missing X_%s or y_%s in %s" %
-                                    (split, split, proc_dir))
-
-        data["X_%s" % split] = np.load(x_path)
-        data["y_%s" % split] = np.load(y_path)
-
-    return data
-
-
-def get_num_nodes(proc_dir):
-    """
-    Infer the number of graph nodes from X_train.
-
-    Assumes X_train has shape:
-        [num_samples, seq_len, num_nodes]
-    """
-    x_path = os.path.join(proc_dir, "X_train.npy")
-    if not os.path.exists(x_path):
-        raise FileNotFoundError("Missing X_train.npy in %s" % proc_dir)
-
-    x = np.load(x_path)
-    return int(x.shape[-1])
-
-
-def client_partition_dir(proc_dir):
-    """
-    Return the clients/ directory inside a processed dataset directory.
-    """
-    return os.path.join(proc_dir, "clients")
-
-
-def get_client_file_paths(proc_dir, role):
-    """
-    Return file paths for a given client role.
-
-    Example:
-        role = "vehicle"
-        -> "clients/client_vehicle_X.npy"
-           "clients/client_vehicle_y.npy"
-    """
-    root = client_partition_dir(proc_dir)
-    x_path = os.path.join(root, "client_%s_X.npy" % role)
-    y_path = os.path.join(root, "client_%s_y.npy" % role)
-    return x_path, y_path
-
-
-def load_client_partition(proc_dir, role):
-    """
-    Load a client's local partition arrays (X, y) for a given role.
+    Args:
+        proc_dir: path to processed dataset directory
+        client_role: optional client name
 
     Returns:
-        X_local: np.ndarray [samples, seq_len, num_nodes_local]
-        y_local: np.ndarray [samples, num_nodes_local]
+        X, y numpy arrays
     """
-    x_path, y_path = get_client_file_paths(proc_dir, role)
+    if client_role is None:
+        X = np.load(os.path.join(proc_dir, "X.npy"))
+        y = np.load(os.path.join(proc_dir, "y.npy"))
+        return X, y
 
-    if not os.path.exists(x_path):
-        raise FileNotFoundError("Missing client X file: %s" % x_path)
-    if not os.path.exists(y_path):
-        raise FileNotFoundError("Missing client y file: %s" % y_path)
-
-    X = np.load(x_path)
-    y = np.load(y_path)
-
+    # FL client-specific partition
+    X = np.load(os.path.join(proc_dir, client_role, "X.npy"))
+    y = np.load(os.path.join(proc_dir, client_role, "y.npy"))
     return X, y
