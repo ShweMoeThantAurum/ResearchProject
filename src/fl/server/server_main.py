@@ -23,6 +23,7 @@ from src.fl.server.evaluate import evaluate_final_model
 from src.fl.server.summary import write_summary
 from src.fl.server.s3_io import load_update, load_round_metadata, save_global_state
 from src.fl.server.utils_server import init_global_model, ensure_dirs
+from src.fl.config.config_loader import load_config
 
 
 ROLES = ["roadside", "vehicle", "sensor", "camera", "bus"]

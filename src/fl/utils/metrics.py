@@ -1,21 +1,23 @@
 """
-Standard regression metrics for traffic flow prediction.
+Common evaluation metrics for FL experiments.
+Implements MAE, RMSE, and MAPE for traffic forecasting.
 """
 
-import numpy as np
+import torch
+import torch.nn.functional as F
 
 
-def mae(y_true, y_pred):
-    """Compute mean absolute error."""
-    return float(np.mean(np.abs(y_true - y_pred)))
+def mae(pred, target):
+    """Mean Absolute Error."""
+    return torch.mean(torch.abs(pred - target)).item()
 
 
-def rmse(y_true, y_pred):
-    """Compute root mean squared error."""
-    return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+def rmse(pred, target):
+    """Root Mean Squared Error."""
+    return torch.sqrt(F.mse_loss(pred, target)).item()
 
 
-def mape(y_true, y_pred):
-    """Compute mean absolute percentage error."""
-    eps = 1e-6
-    return float(np.mean(np.abs((y_true - y_pred) / (y_true + eps))))
+def mape(pred, target):
+    """Mean Absolute Percentage Error."""
+    eps = 1e-7
+    return torch.mean(torch.abs((pred - target) / (target + eps))).item()

@@ -1,44 +1,37 @@
 """
-Lightweight logging utilities for federated learning runs.
+Lightweight logging utilities for FL training and evaluation.
+Handles simple timestamped events and timing helpers.
 """
 
 import os
 import time
+from datetime import datetime
 
-# All plain-text logs go under this directory.
+
 LOG_DIR = "outputs/logs"
 
 
 def _ensure_log_dir():
-    """Create the log directory if it does not exist."""
+    """Create log directory if it does not exist."""
     if not os.path.exists(LOG_DIR):
         os.makedirs(LOG_DIR)
 
 
-def log_event(message, role=None):
-    """Append a log line to a file and print it to the console."""
-    _ensure_log_dir()
-    ts = time.strftime("%Y-%m-%d %H:%M:%S")
-
-    # Optional role prefix such as [roadside], [server], etc.
-    prefix = "[{}]".format(role) if role else ""
-    line = "{} {} {}\n".format(ts, prefix, message)
-
-    path = os.path.join(LOG_DIR, "events.log")
-    with open(path, "a") as f:
-        f.write(line)
-
-    # Mirror logs to stdout for real-time observation.
-    print(line.strip())
-
-
 class Timer:
-    """Measure elapsed wall-clock time."""
-
-    def __init__(self):
-        """Start the timer."""
+    """Simple context timer for measuring durations."""
+    def __enter__(self):
         self.start = time.time()
+        return self
 
-    def elapsed(self):
-        """Return elapsed time in seconds."""
-        return time.time() - self.start
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.end = time.time()
+        self.duration = self.end - self.start
+
+
+def log_event(message, logfile="events.log"):
+    """Append a timestamped message into the central log file."""
+    _ensure_log_dir()
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    path = os.path.join(LOG_DIR, logfile)
+    with open(path, "a") as f:
+        f.write(f"[{timestamp}] {message}\n")
