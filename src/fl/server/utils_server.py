@@ -1,58 +1,35 @@
 """
-Utility helpers used by the federated learning server.
-
-This module keeps purely local logic:
-  - inferring dataset paths
-  - inferring number of nodes
-  - constructing the GRU model skeleton
+Utility helpers for server setup and file management.
 """
 
 import os
-import numpy as np
-from src.fl.models.gru_model import SimpleGRU
+import torch
+
+from src.fl.models import SimpleGRU
+from src.fl.config import settings
 
 
-def get_dataset_name():
+def ensure_dirs():
     """
-    Return the active dataset name as a lowercase string.
-
-    Uses the DATASET environment variable, defaulting to "sz".
+    Ensure experiment directories exist.
     """
-    return os.environ.get("DATASET", "sz").strip().lower()
+    dirs = [
+        "experiments/updates",
+        "experiments/metadata",
+        "outputs/summaries",
+    ]
+    for d in dirs:
+        if not os.path.exists(d):
+            os.makedirs(d)
 
 
-def get_proc_dir(dataset_name):
+def init_global_model(hidden):
     """
-    Build the path to the preprocessed dataset directory for a dataset.
-
-    The convention is:
-        datasets/processed/<dataset_name>/prepared
+    Initialize new GRU model and return state dict.
     """
-    return os.path.join("datasets", "processed", dataset_name, "prepared")
-
-
-def infer_num_nodes(proc_dir):
-    """
-    Infer the number of nodes from the shape of X_train.npy.
-
-    Returns the last dimension of X_train as an integer.
-    """
-    x_path = os.path.join(proc_dir, "X_train.npy")
-    if not os.path.exists(x_path):
-        raise FileNotFoundError(
-            "Cannot infer number of nodes. Missing X_train at: " + x_path
-        )
-
-    X = np.load(x_path)
-    return int(X.shape[-1])
-
-
-def build_initial_model(num_nodes, hidden_size):
-    """
-    Construct a SimpleGRU model and return its state dictionary.
-
-    The server never trains this model locally. It only uses the
-    state dictionary as the initial global model for round 1.
-    """
-    model = SimpleGRU(num_nodes=num_nodes, hidden_size=hidden_size)
+    model = SimpleGRU(
+        input_dim=1,
+        hidden_size=hidden,
+        num_layers=1
+    )
     return model.state_dict()

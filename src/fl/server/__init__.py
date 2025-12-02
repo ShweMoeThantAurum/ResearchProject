@@ -1,3 +1,3 @@
 """
-Server-side federated learning package.
+Server-side FL modules.
 """
