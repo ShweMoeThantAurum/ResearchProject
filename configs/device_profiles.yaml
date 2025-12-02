@@ -1,0 +1,21 @@
+# Device-level energy and bandwidth profiles for each client role
+
+roadside:
+  device_power_watts: 3.0
+  bandwidth_mbps: [20, 55]
+
+vehicle:
+  device_power_watts: 4.0
+  bandwidth_mbps: [25, 60]
+
+sensor:
+  device_power_watts: 2.0
+  bandwidth_mbps: [10, 40]
+
+camera:
+  device_power_watts: 3.5
+  bandwidth_mbps: [10, 45]
+
+bus:
+  device_power_watts: 4.5
+  bandwidth_mbps: [15, 45]

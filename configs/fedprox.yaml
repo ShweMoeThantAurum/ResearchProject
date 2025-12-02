@@ -1,0 +1,19 @@
+# Configuration for FedProx baseline
+
+mode: "FedProx"
+
+training:
+  batch_size: 64
+  local_epochs: 1
+  learning_rate: 0.001
+  hidden_size: 64
+  prox_mu: 0.01   # optional proximal term, implemented on client
+
+fl:
+  rounds: 20
+
+privacy:
+  dp_enabled: false
+
+compression:
+  enabled: false

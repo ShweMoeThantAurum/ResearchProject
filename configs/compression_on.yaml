@@ -1,0 +1,10 @@
+# Enable gradient compression for experiments
+
+compression:
+  enabled: true
+
+# These can be varied in sweeping
+compression_settings:
+  modes: ["sparsify", "topk"]
+  sparsity_levels: [0.3, 0.5, 0.8]
+  topk_fracs: [0.1, 0.3]

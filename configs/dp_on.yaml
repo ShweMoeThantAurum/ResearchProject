@@ -1,0 +1,8 @@
+# Enable Differential Privacy (DP) for experiments
+
+privacy:
+  dp_enabled: true
+
+# Sigma is varied in the experiment (e.g. 0.01, 0.05, 0.1)
+dp:
+  sigma_values: [0.01, 0.05, 0.1]

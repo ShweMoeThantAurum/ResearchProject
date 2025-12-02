@@ -1,0 +1,26 @@
+# Default configuration for Adaptive Energy-Aware Federated Learning (AEFL)
+
+mode: "AEFL"
+
+training:
+  batch_size: 64
+  local_epochs: 1
+  learning_rate: 0.001
+  hidden_size: 64
+
+fl:
+  rounds: 20
+  max_clients_per_round: 3   # hardcoded AEFL selection cap
+
+energy:
+  device_power_watts: 3.5
+  net_j_per_mb: 0.6
+
+privacy:
+  dp_enabled: true
+  dp_sigma: 0.05
+
+compression:
+  enabled: true
+  mode: "sparsify"
+  sparsity: 0.5
