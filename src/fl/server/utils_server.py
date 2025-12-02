@@ -1,38 +1,54 @@
 """
-Shared utilities for server-side FL logic.
-Includes AEFL scoring, metric helpers and role definitions.
+Shared server utilities: roles, config helpers, paths.
 """
+
+import os
 
 ROLES = ["roadside", "vehicle", "sensor", "camera", "bus"]
 
 
-def compute_energy_score(energy):
-    """Normalizes energy so lower energy = higher score."""
-    return 1.0 / (energy + 1e-9)
+def _get_env(name, default):
+    """Reads environment variable with fallback."""
+    v = os.environ.get(name, default)
+    return v
 
 
-def compute_accuracy_score(loss):
-    """Higher accuracy means lower loss, so invert loss."""
-    return 1.0 / (loss + 1e-9)
+def get_mode():
+    """Returns the FL mode (AEFL, FedAvg, FedProx, LocalOnly)."""
+    return _get_env("FL_MODE", "AEFL").lower()
 
 
-def compute_privacy_score(noise_sigma):
-    """Higher DP noise means higher privacy score."""
-    return noise_sigma
+def is_aefl(mode):
+    return mode.lower() == "aefl"
 
 
-def build_eval_metrics(loss, energy, dp_sigma):
-    """Builds AEFL combined score per client."""
-    e = compute_energy_score(energy)
-    a = compute_accuracy_score(loss)
-    p = compute_privacy_score(dp_sigma)
-    return 0.4 * a + 0.4 * e + 0.2 * p
+def is_fedavg(mode):
+    return mode.lower() == "fedavg"
 
 
-def get_aefl_clients_per_round(scores, k=3):
-    """
-    Selects top-k clients based on AEFL combined scores.
-    scores: dict(client → float)
-    """
-    sorted_clients = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    return [c for c, _ in sorted_clients[:k]]
+def is_fedprox(mode):
+    return mode.lower() == "fedprox"
+
+
+def is_localonly(mode):
+    return mode.lower() == "localonly"
+
+
+def get_fl_rounds():
+    """Returns number of FL rounds."""
+    return int(_get_env("FL_ROUNDS", "20"))
+
+
+def get_hidden_size():
+    """Returns GRU hidden size."""
+    return int(_get_env("HIDDEN_SIZE", "64"))
+
+
+def get_batch_size():
+    """Returns batch size."""
+    return int(_get_env("BATCH_SIZE", "64"))
+
+
+def get_proc_dir():
+    """Global directory used to store round updates."""
+    return "datasets/processed"

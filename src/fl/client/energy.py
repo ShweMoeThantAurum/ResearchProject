@@ -1,57 +1,38 @@
 """
-Energy estimation utilities for client rounds.
-Combines compute, FLOPs-based and communication energy.
+Energy estimation utilities for client-side training and communication.
+Used to compute per-round energy in Joules.
 """
 
-from ..utils.logger import log_event
-from .utils_client import get_device_power_watts, get_net_j_per_mb
+import time
 
 
-def estimate_round_energy(role,
-                          round_id,
-                          train_time_sec,
-                          approx_flops,
-                          download_bytes,
-                          upload_bytes):
-    """Estimate compute and communication energy for a round."""
-    device_power = get_device_power_watts()
-    net_j_per_mb = get_net_j_per_mb()
+def compute_compute_energy(duration_s, device_power_watts):
+    """Energy from local computation: E = P * t."""
+    return device_power_watts * duration_s
 
-    # Wall-clock compute energy
-    compute_time_j = device_power * train_time_sec
 
-    # Very rough FLOPs energy model (constant per FLOP)
-    j_per_flop = 1e-12
-    compute_flops_j = approx_flops * j_per_flop
+def compute_comm_energy(num_bytes, net_j_per_mb):
+    """Energy from communication: proportional to MB transferred."""
+    mb = num_bytes / (1024 * 1024)
+    return mb * net_j_per_mb
 
-    total_bytes = download_bytes + upload_bytes
-    mb = total_bytes / (1024.0 * 1024.0)
-    comm_j = net_j_per_mb * mb
 
-    total_j = compute_time_j + compute_flops_j + comm_j
+def compute_energy(
+    compute_duration_s,
+    update_size_bytes,
+    device_power_watts,
+    net_j_per_mb,
+):
+    """
+    Computes total energy for a round:
+    E_total = E_compute + E_comm
+    """
+    e_comp = compute_compute_energy(compute_duration_s, device_power_watts)
+    e_comm = compute_comm_energy(update_size_bytes, net_j_per_mb)
+    total = e_comp + e_comm
 
-    record = {
-        "type": "client_energy",
-        "role": role,
-        "round": round_id,
-        "train_time_sec": train_time_sec,
-        "approx_flops": approx_flops,
-        "download_bytes": download_bytes,
-        "upload_bytes": upload_bytes,
-        "compute_time_j": compute_time_j,
-        "compute_flops_j": compute_flops_j,
-        "comm_j": comm_j,
-        "total_j": total_j,
+    return {
+        "compute_energy": e_comp,
+        "comm_energy": e_comm,
+        "total_energy": total,
     }
-
-    log_event(record)
-
-    print(
-        f"[{role}] Energy r={round_id}: "
-        f"compute_time={compute_time_j:.2f} J, "
-        f"compute_flops={compute_flops_j:.6f} J, "
-        f"comm_total={comm_j:.4f} J, "
-        f"total={total_j:.4f} J"
-    )
-
-    return record
