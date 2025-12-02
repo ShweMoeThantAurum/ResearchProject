@@ -122,3 +122,10 @@ def get_dataset():
 def get_fl_mode():
     """Returns FL mode from environment (AEFL, FedAvg, etc.)."""
     return _get_env("FL_MODE", "AEFL").lower()
+
+def get_results_bucket():
+    """
+    Returns the S3 bucket name used for storing client updates and results.
+    Falls back to S3_BUCKET if no RESULTS_BUCKET is explicitly set.
+    """
+    return _get_env("RESULTS_BUCKET", _get_env("S3_BUCKET", "aefl"))

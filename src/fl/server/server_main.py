@@ -20,9 +20,9 @@ from src.fl.server.aggregation import (
 from src.fl.server.evaluate import evaluate_final_model
 from src.fl.server.summary import generate_cloud_summary
 from src.fl.server.s3_io import (
-    load_client_update,
+    download_client_update,
     load_round_metadata,
-    store_global_model
+    upload_global_model
 )
 from src.fl.server.utils_server import all_roles
 from src.fl.models.gru_model import GRUModel
@@ -40,7 +40,7 @@ def main():
     # Initialise global model
     model = GRUModel(hidden_size=settings.hidden_size)
     global_state = model.state_dict()
-    store_global_model(global_state, 1)
+    upload_global_model(global_state, 1)
 
     # Evaluation loader
     test_loader = load_test_loader_for_server(dataset)
@@ -65,7 +65,7 @@ def main():
         while len(updates) < len(chosen):
             for role in chosen:
                 if role not in updates:
-                    upd = load_client_update(r, role)
+                    upd = download_client_update(r, role)
                     if upd is not None:
                         updates[role] = upd
                         print(f"[SERVER] Received update from {role} ({len(updates)}/{len(chosen)})")
@@ -98,7 +98,7 @@ def main():
 
         # Store next round model
         if r < rounds:
-            store_global_model(global_state, r + 1)
+            upload_global_model(global_state, r + 1)
 
     # Final evaluation
     model.load_state_dict(global_state)
