@@ -1,40 +1,93 @@
 """
-Combined comparison plots for thesis publication.
+Composite plots comparing accuracy and energy across datasets and modes.
 """
 
+import os
 import matplotlib.pyplot as plt
-import numpy as np
+import seaborn as sns
 import pandas as pd
 
-from src.fl.analysis.load_results import load_all_summaries
-from src.fl.analysis.plot_utils import save_plot
+from .load_results import load_all_final_metrics, load_client_energy_summary
+from .plot_utils import set_plot_style, save_figure, nice_mode_label
 
 
-def plot_overall_radar():
+def build_accuracy_energy_frame(datasets, modes, summaries_dir=None, logs_dir=None):
     """
-    Create radar chart showing normalised MAE/RMSE/MAPE for all modes.
+    Build a joined DataFrame with final MAE and total energy per mode and dataset.
     """
-    df = load_all_summaries()
+    metrics_df = load_all_final_metrics(datasets, modes, summaries_dir=summaries_dir)
+
+    energy_df = load_client_energy_summary(logs_dir=logs_dir)
+    if not energy_df.empty:
+        energy_grouped = (
+            energy_df.groupby(["dataset", "mode"])["total_energy_j"]
+            .sum()
+            .reset_index()
+        )
+    else:
+        energy_grouped = pd.DataFrame(columns=["dataset", "mode", "total_energy_j"])
+
+    if metrics_df.empty:
+        return pd.DataFrame()
+
+    merged = metrics_df.merge(
+        energy_grouped,
+        on=["dataset", "mode"],
+        how="left",
+    )
+
+    return merged
+
+
+def plot_mae_vs_energy(datasets, modes, out_path=None, summaries_dir=None, logs_dir=None):
+    """
+    Plot MAE versus total energy for each dataset/mode combination.
+
+    This makes the main trade-off between accuracy and energy visible.
+    """
+    df = build_accuracy_energy_frame(
+        datasets=datasets,
+        modes=modes,
+        summaries_dir=summaries_dir,
+        logs_dir=logs_dir,
+    )
+
     if df.empty:
-        print("[PLOT] No summaries found.")
-        return
+        raise RuntimeError("No combined accuracy/energy data found for plotting")
 
-    modes = sorted(df["mode"].unique())
-    metrics = ["MAE", "RMSE", "MAPE"]
+    df = df.copy()
+    df["mode_label"] = df["mode"].apply(nice_mode_label)
 
-    plt.figure(figsize=(8, 8))
+    set_plot_style()
+    fig, ax = plt.subplots(figsize=(6, 4))
 
-    angles = np.linspace(0, 2 * np.pi, len(metrics), endpoint=False)
-    angles = np.append(angles, angles[0])
+    sns.scatterplot(
+        data=df,
+        x="total_energy_j",
+        y="MAE",
+        hue="mode_label",
+        style="dataset",
+        s=60,
+        ax=ax,
+    )
 
-    for mode in modes:
-        subset = df[df["mode"] == mode].mean()
-        values = [subset[m] for m in metrics]
-        values.append(values[0])
+    for _, row in df.iterrows():
+        label = "%s-%s" % (row["dataset"], row["mode_label"])
+        if not pd.isna(row["total_energy_j"]) and not pd.isna(row["MAE"]):
+            ax.text(
+                row["total_energy_j"],
+                row["MAE"],
+                " " + label,
+                fontsize=8,
+            )
 
-        plt.polar(angles, values, marker="o", label=mode)
+    ax.set_xlabel("Total energy (J)")
+    ax.set_ylabel("MAE")
+    ax.set_title("MAE vs total energy across datasets and FL modes")
+    ax.legend(title="Mode", frameon=True)
 
-    plt.title("Overall Comparison Radar Chart")
-    plt.legend(loc="upper right")
+    if out_path is None:
+        out_path = os.path.join("outputs", "plots", "mae_vs_energy.png")
 
-    save_plot("comparison_radar.png")
+    save_figure(fig, out_path)
+    return out_path
