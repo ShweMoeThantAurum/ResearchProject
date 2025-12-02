@@ -1,53 +1,46 @@
 """
-Partitioning utilities for assigning dataset shards to FL clients.
-
-Implements simple non-IID partitioning by assigning different subsets
-of sensors (nodes) to each client.
+Partition processed datasets into per-client splits.
 """
 
-import os
 import numpy as np
-from src.fl.utils.serialization import save_numpy
+from src.fl.data.loader import load_prepared_data
 
 
-def partition_non_iid(X, y, roles, proc_dir):
-    """
-    Partition a global dataset into role-specific slices.
+CLIENT_ROLES = ["roadside", "vehicle", "sensor", "camera", "bus"]
 
-    Strategy:
-        - randomly assign each client a disjoint subset of nodes
-        - slice X/y accordingly
 
-    Args:
-        X: numpy array [N, seq_len, num_nodes]
-        y: numpy array [N, num_nodes]
-        roles: list of client names
-        proc_dir: output directory where per-client folders will be written
+def split_equally(x, y, n):
+    """Split arrays equally into n segments."""
+    size = len(x)
+    seg = size // n
 
-    Returns:
-        node_assignments: dict mapping role -> list of assigned node indices
-    """
-    num_nodes = X.shape[-1]
-    num_roles = len(roles)
+    xs = []
+    ys = []
 
-    # Random equal partition of node indices
-    indices = np.arange(num_nodes)
-    np.random.shuffle(indices)
-    splits = np.array_split(indices, num_roles)
+    for i in range(n):
+        start = i * seg
+        end = (i + 1) * seg
+        xs.append(x[start:end])
+        ys.append(y[start:end])
 
-    node_assignments = {}
+    return xs, ys
 
-    for role, nodes in zip(roles, splits):
-        role_dir = os.path.join(proc_dir, role)
-        os.makedirs(role_dir, exist_ok=True)
 
-        # Slice X/y for assigned nodes
-        X_slice = X[:, :, nodes]
-        y_slice = y[:, nodes]
+def build_client_partitions():
+    """Return a mapping from role to its local train/test partitions."""
+    train_x, train_y, test_x, test_y = load_prepared_data()
 
-        save_numpy(os.path.join(role_dir, "X.npy"), X_slice)
-        save_numpy(os.path.join(role_dir, "y.npy"), y_slice)
+    # Equal partitioning for all 5 roles
+    xs, ys = split_equally(train_x, train_y, len(CLIENT_ROLES))
 
-        node_assignments[role] = nodes.tolist()
+    client_data = {}
+    for idx, role in enumerate(CLIENT_ROLES):
+        client_data[role] = {
+            "train_x": xs[idx],
+            "train_y": ys[idx],
+            "test_x": test_x,
+            "test_y": test_y,
+        }
 
-    return node_assignments
+    return client_data
+ 

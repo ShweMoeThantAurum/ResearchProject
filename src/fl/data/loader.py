@@ -1,56 +1,43 @@
 """
-Dataset loader and PyTorch wrapper for traffic prediction.
-
-Used by both clients (local training) and server (final evaluation).
+Load processed datasets for federated learning.
 """
 
+import os
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import TensorDataset
+
+from src.fl.config.settings import get_proc_dir
 
 
-class TrafficDataset(Dataset):
-    """
-    PyTorch-compatible dataset wrapping preprocessed sliding window data.
-
-    Attributes:
-        X: numpy input sequences [N, seq_len, num_nodes]
-        y: numpy targets [N, num_nodes]
-    """
-
-    def __init__(self, X, y):
-        """Store already-preprocessed arrays."""
-        self.X = torch.tensor(X, dtype=torch.float32)
-        self.y = torch.tensor(y, dtype=torch.float32)
-
-    def __len__(self):
-        """Return dataset size."""
-        return len(self.X)
-
-    def __getitem__(self, idx):
-        """Return a single (input, target) pair."""
-        return self.X[idx], self.y[idx]
+def _load_numpy(path):
+    """Load a numpy file."""
+    return np.load(path)
 
 
-def load_dataset(proc_dir, client_role=None):
-    """
-    Load preprocessed data for either:
-        - global evaluation (client_role=None)
-        - a specific client partition (client_role="vehicle", etc.)
+def load_prepared_data():
+    """Load preprocessed train and test numpy arrays."""
+    base = get_proc_dir()
 
-    Args:
-        proc_dir: path to processed dataset directory
-        client_role: optional client name
+    train_x = _load_numpy(os.path.join(base, "train_x.npy"))
+    train_y = _load_numpy(os.path.join(base, "train_y.npy"))
+    test_x = _load_numpy(os.path.join(base, "test_x.npy"))
+    test_y = _load_numpy(os.path.join(base, "test_y.npy"))
 
-    Returns:
-        X, y numpy arrays
-    """
-    if client_role is None:
-        X = np.load(os.path.join(proc_dir, "X.npy"))
-        y = np.load(os.path.join(proc_dir, "y.npy"))
-        return X, y
+    return train_x, train_y, test_x, test_y
 
-    # FL client-specific partition
-    X = np.load(os.path.join(proc_dir, client_role, "X.npy"))
-    y = np.load(os.path.join(proc_dir, client_role, "y.npy"))
-    return X, y
+
+def to_tensor_dataset(x, y):
+    """Convert numpy arrays to a PyTorch TensorDataset."""
+    tx = torch.tensor(x).float()
+    ty = torch.tensor(y).float()
+    return TensorDataset(tx, ty)
+
+
+def load_datasets_as_torch():
+    """Load processed data as PyTorch datasets."""
+    train_x, train_y, test_x, test_y = load_prepared_data()
+    return (
+        to_tensor_dataset(train_x, train_y),
+        to_tensor_dataset(test_x, test_y),
+    )

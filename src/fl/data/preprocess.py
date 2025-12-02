@@ -1,59 +1,75 @@
 """
-Preprocessing utilities for raw traffic datasets.
-
-Handles:
-    - missing value cleanup
-    - min–max normalization
-    - sequence-to-supervised sliding window creation
-    - saving processed datasets
+Preprocessing pipeline for supported datasets.
 """
 
 import os
 import numpy as np
-from src.fl.utils.serialization import save_numpy
+
+from src.fl.config.settings import get_raw_dir, get_proc_dir, get_dataset
 
 
-def preprocess_dataset(raw_array, seq_len=12, horizon=1, save_dir=None):
+def _sliding_windows(data, seq_len=12):
+    """Create sliding windows for GRU input."""
+    x = []
+    y = []
+    for i in range(len(data) - seq_len):
+        x.append(data[i:i + seq_len])
+        y.append(data[i + seq_len])
+    return np.array(x), np.array(y)
+
+
+def _normalise(data):
+    """Min-max normalise each feature."""
+    mn = data.min(axis=0)
+    mx = data.max(axis=0)
+    return (data - mn) / (mx - mn + 1e-6), mn, mx
+
+
+def preprocess_dataset():
     """
-    Clean and convert a raw traffic matrix into supervised learning windows.
-
-    Args:
-        raw_array: numpy array of shape [time, num_nodes]
-        seq_len: number of past timesteps for each input sequence
-        horizon: number of timesteps ahead to predict
-        save_dir: optional output directory to save processed files
-
-    Returns:
-        X: input sequences [num_samples, seq_len, num_nodes]
-        y: targets [num_samples, num_nodes]
-        norm_stats: dict with min/max for denormalization
+    Preprocess one dataset from raw CSV into train/test numpy files.
     """
-    # Fill missing values with column means
-    clean = np.where(np.isnan(raw_array), np.nanmean(raw_array, axis=0), raw_array)
 
-    # Min–max normalization
-    data_min = clean.min(axis=0)
-    data_max = clean.max(axis=0)
-    norm = (clean - data_min) / (data_max - data_min + 1e-6)
+    dataset = get_dataset()
+    raw_dir = get_raw_dir()
+    proc_dir = get_proc_dir()
 
-    # Sliding windows
-    X_list = []
-    y_list = []
+    if not os.path.exists(proc_dir):
+        os.makedirs(proc_dir)
 
-    T = len(norm)
-    for t in range(T - seq_len - horizon + 1):
-        X_list.append(norm[t : t + seq_len])
-        y_list.append(norm[t + seq_len + horizon - 1])
+    # Dataset-specific raw filename
+    fname = None
+    if dataset == "sz":
+        fname = "sz.csv"
+    elif dataset == "los":
+        fname = "los.csv"
+    elif dataset == "pems08":
+        fname = "pems08.csv"
+    else:
+        raise ValueError("Unsupported dataset {}".format(dataset))
 
-    X = np.array(X_list, dtype=np.float32)
-    y = np.array(y_list, dtype=np.float32)
+    raw_path = os.path.join(raw_dir, fname)
+    data = np.loadtxt(raw_path, delimiter=",")
 
-    norm_stats = {"min": data_min, "max": data_max}
+    # Normalise
+    data_norm, mn, mx = _normalise(data)
 
-    if save_dir is not None:
-        os.makedirs(save_dir, exist_ok=True)
-        save_numpy(os.path.join(save_dir, "X.npy"), X)
-        save_numpy(os.path.join(save_dir, "y.npy"), y)
-        save_numpy(os.path.join(save_dir, "norm_stats.npy"), np.array([data_min, data_max]))
+    # Sliding windows for GRU
+    x, y = _sliding_windows(data_norm)
 
-    return X, y, norm_stats
+    # Train-test split (80/20)
+    split = int(len(x) * 0.8)
+    train_x = x[:split]
+    train_y = y[:split]
+    test_x = x[split:]
+    test_y = y[split:]
+
+    # Save processed arrays
+    np.save(os.path.join(proc_dir, "train_x.npy"), train_x)
+    np.save(os.path.join(proc_dir, "train_y.npy"), train_y)
+    np.save(os.path.join(proc_dir, "test_x.npy"), test_x)
+    np.save(os.path.join(proc_dir, "test_y.npy"), test_y)
+
+    # Also save normalisation parameters
+    np.save(os.path.join(proc_dir, "mn.npy"), mn)
+    np.save(os.path.join(proc_dir, "mx.npy"), mx)
