@@ -24,3 +24,11 @@ def load_client_data(base_dir, role):
     """Loads a single client partition such as roadside.pt."""
     path = os.path.join(base_dir, role + ".pt")
     return load_tensor(path)
+
+def load_client_partition(dataset, role):
+    """Loads a client's partition from datasets/processed/<dataset>/<role>.pt."""
+    base = os.path.join("datasets", "processed", dataset)
+    path = os.path.join(base, role + ".pt")
+    if not os.path.exists(path):
+        raise FileNotFoundError("Client partition missing: " + path)
+    return torch.load(path)  # (X, y)
