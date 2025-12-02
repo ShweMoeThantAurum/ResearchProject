@@ -1,143 +1,88 @@
 """
-Main client loop for federated learning.
-Downloads global model, trains locally, applies DP and compression,
-uploads updates and metadata, and logs energy per round.
+Client-side entrypoint for federated learning.
+
+Each client loads its dataset partition, receives the global model,
+performs local training, computes energy usage, applies optional
+compression or DP noise, and uploads its update + metadata to S3.
 """
 
 import time
-import torch
-import numpy as np
-
-from ..models.gru_model import GRUModel
-from ..utils.logger import log_event
-from ..data.loader import load_client_loader
-from .utils_client import (
-    get_role,
-    get_dataset,
-    get_fl_mode,
-    get_fl_rounds,
-    get_batch_size,
-    get_local_epochs,
-    get_lr,
-    get_hidden_size,
-    build_round_metadata,
-    cleanup_local_tmp,
+from src.fl.config.settings import settings
+from src.fl.data.loader import load_client_partition
+from src.fl.models.gru_model import GRUModel
+from src.fl.client.train import train_one_round
+from src.fl.client.energy import compute_energy
+from src.fl.client.comm import (
+    download_global_model,
+    upload_update,
+    upload_metadata
 )
-from .train import train_one_round
-from .energy import estimate_round_energy
-from .comm import download_global_model, upload_update, upload_metadata
-from .dp import apply_dp_if_enabled
-from .compression import apply_compression_if_enabled
+from src.fl.client.dp import apply_dp_noise
+from src.fl.client.compression import compress_update
+from src.fl.utils.logger import log_event
 
 
 def main():
-    """Run the full client training sequence for all rounds."""
-    role = get_role()
-    dataset = get_dataset()
-    mode = get_fl_mode()
-    rounds = get_fl_rounds()
-    batch_size = get_batch_size()
-    local_epochs = get_local_epochs()
-    lr = get_lr()
-    hidden_size = get_hidden_size()
+    role = settings.client_role
+    dataset = settings.dataset
+    rounds = settings.fl_rounds
 
-    device = "cpu"
+    log_event(role, f"Starting client for dataset={dataset}")
 
-    print(
-        f"[{role}] Starting client | dataset={dataset}, mode={mode}, "
-        f"rounds={rounds}, batch={batch_size}, epochs={local_epochs}, lr={lr}"
-    )
+    # Load local dataset partition
+    loader = load_client_partition(dataset, role)
 
-    cleanup_local_tmp(role)
+    # Initialise model
+    model = GRUModel(hidden_size=settings.hidden_size)
 
-    # Load local data once to infer num_nodes and build DataLoader
-    loader, num_nodes = load_client_loader(dataset, role, batch_size)
-
-    model = GRUModel(num_nodes=num_nodes, hidden_size=hidden_size).to(device)
-
-    total_energy_j = 0.0
+    total_energy = 0.0
 
     for r in range(1, rounds + 1):
-        print(f"\n[{role}] ===== ROUND {r} =====")
+        print(f"[{role}] ===== ROUND {r} =====")
 
-        # Download global model for this round
-        global_path, dl_bytes = download_global_model(r, role)
-        global_state = torch.load(global_path, map_location=device)
-        model.load_state_dict(global_state)
+        # Download global model parameters
+        state = download_global_model(r)
+        model.load_state_dict(state)
 
-        # Local training
-        train_start = time.time()
+        # Train locally for one round
+        start = time.time()
+        loss = train_one_round(model, loader, settings)
+        train_time = time.time() - start
 
-        if mode.lower() == "localonly":
-            updated_state = {k: v.cpu() for k, v in model.state_dict().items()}
-            train_time_sec = 0.0
-            avg_loss = 0.0
-            train_samples = 0
-            approx_flops = 0.0
-        else:
-            prox_ref_state = None
-            if mode.lower() == "fedprox":
-                prox_ref_state = {k: v.clone().to(device) for k, v in global_state.items()}
+        # Create update dictionary
+        update = {k: v.cpu() for k, v in model.state_dict().items()}
 
-            updated_state, avg_loss, train_samples, approx_flops = train_one_round(
-                model=model,
-                loader=loader,
-                role=role,
-                round_id=r,
-                device=device,
-                local_epochs=local_epochs,
-                lr=lr,
-                mode=mode,
-                global_state=prox_ref_state,
-            )
-            train_time_sec = time.time() - train_start
+        # Optional DP
+        if settings.dp_enabled:
+            update = apply_dp_noise(update, sigma=settings.dp_sigma)
 
-        # DP
-        dp_state = apply_dp_if_enabled(updated_state, role, r)
+        # Optional Compression
+        if settings.compression_enabled:
+            update = compress_update(update, settings)
 
-        # Compression
-        comp_state, kept_ratio, modeled_bytes = apply_compression_if_enabled(dp_state, role, r)
+        # Compute energy
+        energy, breakdown = compute_energy(
+            compute_time=train_time,
+            model_size_mb=settings.model_size_mb,
+            batch_energy=settings.device_power_watts,
+            net_energy=settings.net_j_per_mb
+        )
+        total_energy += energy
 
-        # Upload processed update
-        up_bytes, up_latency = upload_update(r, role, comp_state)
+        # Upload update + metadata
+        upload_update(role, r, update)
+        upload_metadata(role, r, {
+            "bandwidth_mbps": breakdown["bandwidth"],
+            "total_energy_j": energy
+        })
 
-        # Energy estimation based on actual bytes
-        energy_record = estimate_round_energy(
-            role=role,
-            round_id=r,
-            train_time_sec=train_time_sec,
-            approx_flops=approx_flops,
-            download_bytes=dl_bytes,
-            upload_bytes=up_bytes,
+        print(
+            f"[{role}] Round {r} | loss={loss:.6f}, "
+            f"time={train_time:.3f}s, energy={energy:.3f} J"
         )
 
-        total_energy_j += energy_record["total_j"]
+    print(f"[{role}] Finished {rounds} rounds. Total estimated energy={total_energy:.2f} J.")
 
-        # Metadata for AEFL selection
-        meta = build_round_metadata(
-            role=role,
-            round_id=r,
-            train_loss=avg_loss,
-            train_samples=train_samples,
-            compute_time_j=energy_record["compute_time_j"],
-            compute_flops_j=energy_record["compute_flops_j"],
-            comm_j=energy_record["comm_j"],
-            download_bytes=dl_bytes,
-            upload_bytes=up_bytes,
-            upload_latency_sec=up_latency,
-        )
-        upload_metadata(r, role, meta)
 
-    log_event({
-        "type": "client_summary",
-        "role": role,
-        "rounds": rounds,
-        "total_energy_j": total_energy_j,
-        "mode": mode,
-        "dataset": dataset,
-    })
-
-    print(
-        f"[{role}] Finished {rounds} rounds. "
-        f"Total estimated energy={total_energy_j:.2f} J."
-    )
+if __name__ == "__main__":
+    main()
