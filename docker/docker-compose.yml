@@ -1,0 +1,89 @@
+version: "3.9"
+
+x-common: &common
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  working_dir: /app
+  network_mode: host
+  restart: "no"
+  volumes:
+    - ..:/app
+    - ~/.aws:/root/.aws:ro
+  environment: &env_common
+    AWS_REGION: "us-east-1"
+    S3_BUCKET: "aefl"
+    DATASET: "${DATASET}"
+
+    FL_MODE: "AEFL"
+    FL_ROUNDS: 20
+    BATCH_SIZE: 64
+    LOCAL_EPOCHS: 1
+    LR: 0.001
+    HIDDEN_SIZE: 64
+
+    DEVICE_POWER_WATTS: 3.5
+    NET_J_PER_MB: 0.6
+
+    DP_ENABLED: "true"
+    DP_SIGMA: 0.05
+
+    COMPRESSION_ENABLED: "true"
+    COMPRESSION_MODE: "sparsify"
+    COMPRESSION_SPARSITY: 0.5
+
+services:
+
+  # ======================
+  # Federated Server
+  # ======================
+  server:
+    <<: *common
+    container_name: fl_server
+    environment:
+      <<: *env_common
+    command: [ "server" ]
+
+  # ======================
+  # Federated Clients
+  # ======================
+
+  roadside:
+    <<: *common
+    container_name: client_roadside
+    environment:
+      <<: *env_common
+      CLIENT_ROLE: "roadside"
+    command: [ "client" ]
+
+  vehicle:
+    <<: *common
+    container_name: client_vehicle
+    environment:
+      <<: *env_common
+      CLIENT_ROLE: "vehicle"
+    command: [ "client" ]
+
+  sensor:
+    <<: *common
+    container_name: client_sensor
+    environment:
+      <<: *env_common
+      CLIENT_ROLE: "sensor"
+    command: [ "client" ]
+
+  camera:
+    <<: *common
+    container_name: client_camera
+    environment:
+      <<: *env_common
+      CLIENT_ROLE: "camera"
+    command: [ "client" ]
+
+  bus:
+    <<: *common
+    container_name: client_bus
+    environment:
+      <<: *env_common
+      CLIENT_ROLE: "bus"
+    command: [ "client" ]
