@@ -1,4 +1,9 @@
-"""Client-side dataset loading and preprocessing utilities."""
+"""
+Client-side dataset loading utilities.
+
+Handles loading local X/y partitions, verifying shapes, applying padding
+or trimming if needed, and constructing DataLoaders for training.
+"""
 
 import os
 import numpy as np
@@ -8,26 +13,19 @@ from torch.utils.data import DataLoader, TensorDataset
 from src.fl.logger import log_event
 
 
-def client_file_paths(proc_dir: str, role: str) -> Tuple[str, str]:
-    """
-    Return the file paths for this client’s local X and y arrays.
-
-    Expected filenames:
-        <proc_dir>/clients/client_<role>_X.npy
-        <proc_dir>/clients/client_<role>_y.npy
-    """
+def client_file_paths(proc_dir, role):
+    """Return the expected X/y file paths for the given client role."""
     root = os.path.join(proc_dir, "clients")
     x_path = os.path.join(root, f"client_{role}_X.npy")
     y_path = os.path.join(root, f"client_{role}_y.npy")
     return x_path, y_path
 
 
-def pad_or_trim_last_dim(arr: np.ndarray, target: int) -> np.ndarray:
+def pad_or_trim_last_dim(arr, target):
     """
-    Ensure that arr.shape[-1] matches the target number of nodes.
+    Ensure array shape matches expected number of nodes.
 
-    If smaller → pad with zeros.
-    If larger → truncate the extra columns.
+    Pads with zeros if too small; truncates if too large.
     """
     *_, d = arr.shape
     if d == target:
@@ -40,14 +38,8 @@ def pad_or_trim_last_dim(arr: np.ndarray, target: int) -> np.ndarray:
     return np.pad(arr, pad_width, mode="constant")
 
 
-def load_local_data(proc_dir: str, role: str, num_nodes: int,
-                    batch_size: int, local_epochs: int, lr: float) -> DataLoader:
-    """
-    Load and prepare the client's local dataset.
-
-    Ensures that tensors have the correct last dimension (num_nodes)
-    and creates a DataLoader for training.
-    """
+def load_local_data(proc_dir, role, num_nodes, batch_size, local_epochs, lr):
+    """Load the client’s local partition and return a DataLoader."""
     x_path, y_path = client_file_paths(proc_dir, role)
 
     if not os.path.exists(x_path):

@@ -1,4 +1,9 @@
-"""Model package export. Makes SimpleGRU available for import."""
+"""
+Model definitions used in the federated learning experiments.
+
+Currently exposes a lightweight GRU-based predictor for spatio-temporal
+traffic flow forecasting.
+"""
 
 from .simple_gru import SimpleGRU
 

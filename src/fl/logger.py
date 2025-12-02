@@ -1,4 +1,9 @@
-"""Lightweight logging utilities for federated learning experiments."""
+"""
+Lightweight logging helpers for federated learning runs.
+
+Provides a simple JSONL logger and a timer utility for measuring latency
+and durations throughout client and server execution.
+"""
 
 import os
 import json
@@ -10,22 +15,18 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 
 class Timer:
-    """Simple wall-clock timer used to measure elapsed time in seconds."""
+    """Small helper for measuring elapsed wall-clock seconds."""
 
     def __init__(self):
-        """Initialise the timer with no active start time."""
+        """Prepare the timer with no active start."""
         self._start = None
 
     def start(self):
-        """Start the timer."""
+        """Start timing."""
         self._start = time.time()
 
     def stop(self):
-        """
-        Stop the timer and return the elapsed time in seconds.
-
-        If the timer was never started, returns 0.0.
-        """
+        """Stop timing and return elapsed seconds."""
         if self._start is None:
             return 0.0
         elapsed = time.time() - self._start
@@ -33,13 +34,8 @@ class Timer:
         return elapsed
 
 
-def log_event(filename: str, event: Dict[str, Any]) -> None:
-    """
-    Append a single JSON event to a log file in JSON Lines (JSONL) format.
-
-    The event is stored under run_logs/<filename>, with an added timestamp
-    field 'ts' in seconds since the Unix epoch.
-    """
+def log_event(filename, event):
+    """Append an event as a JSON line into run_logs/<filename>."""
     path = os.path.join(LOG_DIR, filename)
     event = dict(event)
     event.setdefault("ts", time.time())

@@ -1,3 +1,7 @@
+# Docker Compose configuration for AEFL federated learning clients.
+# Launches five roles: roadside, vehicle, sensor, camera, bus.
+# Dataset name is provided at runtime via: export DATASET=<name>.
+
 x-common: &common
   build:
     context: .
@@ -23,6 +27,7 @@ x-common: &common
     LR: 0.001
     HIDDEN_SIZE: 64
 
+    # default values (can be overridden)
     DEVICE_POWER_WATTS: 3.5
     NET_J_PER_MB: 0.6
 
@@ -42,6 +47,7 @@ services:
     environment:
       <<: *common-env
       CLIENT_ROLE: "roadside"
+      DEVICE_POWER_WATTS: 2.0 # low power roadside sensor
     command: [ "python", "-u", "-m", "src.fl.client" ]
 
   client_vehicle:
@@ -50,6 +56,7 @@ services:
     environment:
       <<: *common-env
       CLIENT_ROLE: "vehicle"
+      DEVICE_POWER_WATTS: 4.0 # medium/high vehicular unit
     command: [ "python", "-u", "-m", "src.fl.client" ]
 
   client_sensor:
@@ -58,6 +65,7 @@ services:
     environment:
       <<: *common-env
       CLIENT_ROLE: "sensor"
+      DEVICE_POWER_WATTS: 2.5 # embedded IoT sensor
     command: [ "python", "-u", "-m", "src.fl.client" ]
 
   client_camera:
@@ -66,6 +74,7 @@ services:
     environment:
       <<: *common-env
       CLIENT_ROLE: "camera"
+      DEVICE_POWER_WATTS: 5.0 # high-power camera node
     command: [ "python", "-u", "-m", "src.fl.client" ]
 
   client_bus:
@@ -74,4 +83,5 @@ services:
     environment:
       <<: *common-env
       CLIENT_ROLE: "bus"
+      DEVICE_POWER_WATTS: 4.0 # medium/high-powered vehicle system
     command: [ "python", "-u", "-m", "src.fl.client" ]

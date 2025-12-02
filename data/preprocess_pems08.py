@@ -1,4 +1,9 @@
-"""Preprocess PeMSD8 traffic dataset and create federated learning client splits."""
+"""
+Preprocessing pipeline for the PeMSD8 traffic dataset.
+
+Loads NPZ traffic tensors, extracts sliding-window samples, normalises
+signals, and creates federated client partitions mapped to IoT roles.
+"""
 
 import os
 import boto3
@@ -11,7 +16,7 @@ s3 = boto3.client("s3")
 
 
 def download_from_s3(raw_dir):
-    """Ensure PeMSD8 NPZ file is present locally, downloading from S3 if missing."""
+    """Download PeMSD8 NPZ file if missing."""
     os.makedirs(raw_dir, exist_ok=True)
     fname = "pems08.npz"
     local = os.path.join(raw_dir, fname)
@@ -31,7 +36,7 @@ def preprocess_and_split(raw_dir="data/raw/pems08",
                          noniid=False,
                          imbalance=0.4,
                          seed=42):
-    """Convert PeMSD8 into sliding-window arrays and federated client splits."""
+    """Create sliding-window sequences and federated partitions for PeMSD8."""
     download_from_s3(raw_dir)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -71,7 +76,7 @@ def preprocess_and_split(raw_dir="data/raw/pems08",
 
     build_client_datasets(out_dir, num_clients, noniid, imbalance, seed)
 
-    print("\nRenaming client partitions to semantic IoT roles...")
+    print("\nRenaming client partitions to IoT roles...")
 
     role_map = {0: "roadside", 1: "vehicle", 2: "sensor", 3: "camera", 4: "bus"}
     clients_dir = os.path.join(out_dir, "clients")

@@ -1,4 +1,8 @@
-"""Allows running the FL client via: python -m src.fl.client"""
+"""
+Allows running the FL client as a module:
+
+    python -m src.fl.client
+"""
 
 from .main import main
 

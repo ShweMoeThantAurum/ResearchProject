@@ -1,4 +1,14 @@
-"""Main cloud FL server coordinating AEFL, FedAvg, FedProx, and LocalOnly."""
+"""
+Main server orchestration loop for adaptive federated learning.
+
+Coordinates:
+- S3 cleanup
+- Global model initialisation
+- FL rounds
+- Aggregation
+- Final evaluation
+- Summary generation
+"""
 
 import os
 import time
@@ -23,7 +33,6 @@ from src.fl.server.evaluate import evaluate_final_model
 from src.fl.server.summary import generate_cloud_summary
 from src.fl.server.modes import get_mode, is_aefl, is_fedavg, is_fedprox, is_localonly
 
-
 ROLES = ["roadside", "vehicle", "sensor", "camera", "bus"]
 
 PROC_DIR = get_proc_dir()
@@ -35,47 +44,30 @@ print(f"[SERVER] CONFIG: mode={FL_MODE.upper()}, rounds={FL_ROUNDS}, hidden={HID
 
 
 def main():
-    """
-    Main cloud-based federated learning orchestration loop.
-
-    This function:
-      - cleans S3
-      - initialises the global model
-      - runs FL rounds
-      - performs aggregation
-      - evaluates the final model
-      - generates summary outputs
-    """
+    """Run the main federated learning training loop on the server."""
     print(f"[SERVER] Starting server | mode={FL_MODE.upper()}")
 
-    # Cleanup S3
     clear_round_data()
 
-    # Init model
     num_nodes = infer_num_nodes(PROC_DIR)
     global_state = init_global_model(num_nodes, hidden=HIDDEN_SIZE)
 
-    # Upload initial model for Round 1
     store_global_model(global_state, round_id=1)
 
-    # ------------------------------------------------------------
-    # Federated Learning Rounds
-    # ------------------------------------------------------------
+    # FL rounds
     for r in range(1, FL_ROUNDS + 1):
         print(f"\n========== ROUND {r} ==========")
 
-        # AEFL adaptive client selection (from previous round metadata)
+        # ===== CLIENT SELECTION =====
         if is_aefl(FL_MODE) and r > 1:
             prev_meta = load_round_metadata(r - 1)
-            chosen = select_clients_aefl(prev_meta, ROLES)
-            print(f"[SERVER] AEFL selected: {chosen}")
+            chosen, scores = select_clients_aefl(prev_meta, ROLES)
         else:
             chosen = select_all_clients(ROLES)
-            print(f"[SERVER] All clients chosen: {chosen}")
+            scores = {r: 1.0 for r in chosen}
 
-        # --------------------------------------------------------
-        # Wait for client updates
-        # --------------------------------------------------------
+        print(f"[SERVER] Selected clients: {chosen}")
+
         updates = {}
         start_wait = time.time()
         timeout = 300
@@ -99,28 +91,21 @@ def main():
 
             time.sleep(2)
 
-        # --------------------------------------------------------
-        # Aggregation
-        # --------------------------------------------------------
+        # ===== AGGREGATION =====
         start_aggr = time.time()
 
         if is_aefl(FL_MODE):
-            global_state = aggregate_aefl(updates)
+            global_state = aggregate_aefl(updates, scores)
             mode_label = "AEFL"
-
         elif is_fedavg(FL_MODE):
             global_state = aggregate_fedavg(updates)
             mode_label = "FedAvg"
-
         elif is_fedprox(FL_MODE):
             global_state = aggregate_fedprox(updates)
             mode_label = "FedProx"
-
         elif is_localonly(FL_MODE):
-            # "LocalOnly" still uses FedAvg aggregation
             global_state = aggregate_fedavg(updates)
             mode_label = "LocalOnly"
-
         else:
             global_state = aggregate_fedavg(updates)
             mode_label = FL_MODE
@@ -128,16 +113,12 @@ def main():
         aggr_time = time.time() - start_aggr
         print(f"[SERVER] Aggregation complete | mode={mode_label}, time={aggr_time:.3f}s")
 
-        # --------------------------------------------------------
-        # Upload NEW aggregated model for the NEXT round
-        # --------------------------------------------------------
+        # Store next round global
         next_round = r + 1
         if next_round <= FL_ROUNDS:
             store_global_model(global_state, next_round)
 
-    # ------------------------------------------------------------
-    # Final Evaluation
-    # ------------------------------------------------------------
+    # FINAL EVALUATION
     metrics = evaluate_final_model(global_state, PROC_DIR, num_nodes, HIDDEN_SIZE)
 
     print("\n[SERVER] Final Evaluation:")

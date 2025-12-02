@@ -1,4 +1,9 @@
-"""Preprocess Los-Loop dataset into standardized arrays and federated partitions."""
+"""
+Preprocessing pipeline for the Los-Loop dataset.
+
+Loads raw speed/adjacency CSVs, normalises traffic signals,
+constructs sliding-window samples, and generates FL client partitions.
+"""
 
 import os
 import boto3
@@ -12,7 +17,7 @@ s3 = boto3.client("s3")
 
 
 def download_from_s3(raw_dir):
-    """Download Los-Loop raw CSVs if they do not already exist locally."""
+    """Download Los-Loop raw CSV files if missing."""
     os.makedirs(raw_dir, exist_ok=True)
     files = ["los_speed.csv", "los_adj.csv"]
 
@@ -33,10 +38,7 @@ def preprocess_and_split(raw_dir="data/raw/los",
                          noniid=False,
                          imbalance=0.4,
                          seed=42):
-    """
-    Convert raw Los-Loop CSVs into normalized sliding-window arrays,
-    create train/val/test sets, and build FL client partitions.
-    """
+    """Create sequences and federated partitions for Los-Loop data."""
     download_from_s3(raw_dir)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -45,6 +47,7 @@ def preprocess_and_split(raw_dir="data/raw/los",
     speed = pd.read_csv(os.path.join(raw_dir, "los_speed.csv"), header=None).values
     adj = pd.read_csv(os.path.join(raw_dir, "los_adj.csv"), header=None).values
 
+    # Normalise speed signals
     speed = (speed - speed.mean()) / speed.std()
 
     seq_len = 12
