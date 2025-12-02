@@ -7,3 +7,6 @@ data/processed/
 *.log
 .DS_Store
 .env
+datasets/processed/
+*.npy
+*.npz
