@@ -1,46 +1,53 @@
 """
-Partition processed datasets into per-client splits.
+Partitioning logic for creating role-specific datasets for FL clients.
+Splits preprocessed tensors into per-role partitions and train/test loaders.
 """
 
-import numpy as np
-from src.fl.data.loader import load_prepared_data
+import os
+import torch
+from torch.utils.data import TensorDataset, DataLoader
 
 
-CLIENT_ROLES = ["roadside", "vehicle", "sensor", "camera", "bus"]
+ROLES = ["roadside", "vehicle", "sensor", "camera", "bus"]
 
 
-def split_equally(x, y, n):
-    """Split arrays equally into n segments."""
-    size = len(x)
-    seg = size // n
-
-    xs = []
-    ys = []
-
-    for i in range(n):
-        start = i * seg
-        end = (i + 1) * seg
-        xs.append(x[start:end])
-        ys.append(y[start:end])
-
-    return xs, ys
+def split_by_nodes(tensor, num_nodes):
+    """Split sequence windows by nodes dimension."""
+    # tensor shape: [N, seq, nodes]
+    return tensor[:, :, :num_nodes]
 
 
-def build_client_partitions():
-    """Return a mapping from role to its local train/test partitions."""
-    train_x, train_y, test_x, test_y = load_prepared_data()
+def partition_clients(data_tensor, num_nodes):
+    """Slice per-role data partitions from the sequence tensor."""
+    per_role = {}
 
-    # Equal partitioning for all 5 roles
-    xs, ys = split_equally(train_x, train_y, len(CLIENT_ROLES))
+    # Each role gets its own slice of nodes
+    nodes_per_role = num_nodes // len(ROLES)
 
-    client_data = {}
-    for idx, role in enumerate(CLIENT_ROLES):
-        client_data[role] = {
-            "train_x": xs[idx],
-            "train_y": ys[idx],
-            "test_x": test_x,
-            "test_y": test_y,
-        }
+    for i, role in enumerate(ROLES):
+        start = i * nodes_per_role
+        end = start + nodes_per_role
+        sub = data_tensor[:, :, start:end]
+        per_role[role] = sub
 
-    return client_data
- 
+    return per_role
+
+
+def create_dataloaders(role_tensor, batch_size):
+    """Build train and test loaders for a role."""
+    X = role_tensor[:, :-1, :]   # all but last step
+    Y = role_tensor[:, -1, :]    # last step is prediction target
+
+    size = len(X)
+    split = int(size * 0.8)
+
+    X_train, Y_train = X[:split], Y[:split]
+    X_test, Y_test = X[split:], Y[split:]
+
+    train_ds = TensorDataset(X_train, Y_train)
+    test_ds = TensorDataset(X_test, Y_test)
+
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
+
+    return train_loader, test_loader

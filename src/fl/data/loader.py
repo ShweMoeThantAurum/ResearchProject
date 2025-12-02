@@ -1,43 +1,48 @@
 """
-Load processed datasets for federated learning.
+Central loader for preprocessed dataset tensors and role-specific partitions.
+Used by both server and clients during FL execution.
 """
 
 import os
-import numpy as np
 import torch
-from torch.utils.data import TensorDataset
 
-from src.fl.config.settings import get_proc_dir
-
-
-def _load_numpy(path):
-    """Load a numpy file."""
-    return np.load(path)
+from .partition import partition_clients, create_dataloaders, ROLES
 
 
-def load_prepared_data():
-    """Load preprocessed train and test numpy arrays."""
-    base = get_proc_dir()
-
-    train_x = _load_numpy(os.path.join(base, "train_x.npy"))
-    train_y = _load_numpy(os.path.join(base, "train_y.npy"))
-    test_x = _load_numpy(os.path.join(base, "test_x.npy"))
-    test_y = _load_numpy(os.path.join(base, "test_y.npy"))
-
-    return train_x, train_y, test_x, test_y
+def load_preprocessed(dataset):
+    """Load a preprocessed dataset tensor."""
+    path = os.path.join("datasets", "processed", f"{dataset}.pt")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Preprocessed dataset not found: {path}")
+    return torch.load(path, map_location="cpu")
 
 
-def to_tensor_dataset(x, y):
-    """Convert numpy arrays to a PyTorch TensorDataset."""
-    tx = torch.tensor(x).float()
-    ty = torch.tensor(y).float()
-    return TensorDataset(tx, ty)
+def infer_num_nodes(tensor):
+    """Infer the number of nodes from a preprocessed tensor."""
+    return tensor.shape[-1]
 
 
-def load_datasets_as_torch():
-    """Load processed data as PyTorch datasets."""
-    train_x, train_y, test_x, test_y = load_prepared_data()
-    return (
-        to_tensor_dataset(train_x, train_y),
-        to_tensor_dataset(test_x, test_y),
-    )
+def load_client_partition(dataset, role, batch_size):
+    """Load train/test loaders for a specific role."""
+    tensor = load_preprocessed(dataset)
+    num_nodes = infer_num_nodes(tensor)
+
+    per_role = partition_clients(tensor, num_nodes)
+
+    if role not in per_role:
+        raise ValueError(f"Unknown role: {role}")
+
+    train_loader, test_loader = create_dataloaders(per_role[role], batch_size)
+    return train_loader, test_loader, num_nodes
+
+
+def load_test_loader_for_server(dataset, batch_size):
+    """Load global test loader for server-side evaluation."""
+    tensor = load_preprocessed(dataset)
+    num_nodes = infer_num_nodes(tensor)
+
+    # Use roadside role test set as evaluation baseline
+    per_role = partition_clients(tensor, num_nodes)
+    _, test_loader = create_dataloaders(per_role["roadside"], batch_size)
+
+    return test_loader, num_nodes
