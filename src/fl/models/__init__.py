@@ -5,6 +5,6 @@ Currently exposes a lightweight GRU-based predictor for spatio-temporal
 traffic flow forecasting.
 """
 
-from .simple_gru import SimpleGRU
+from .gru_model import SimpleGRU
 
 __all__ = ["SimpleGRU"]
