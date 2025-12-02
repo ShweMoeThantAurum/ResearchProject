@@ -24,7 +24,7 @@ from src.fl.server.s3_io import (
     load_round_metadata,
     upload_global_model
 )
-from src.fl.server.utils_server import all_roles
+from src.fl.server.utils_server import ROLES
 from src.fl.models.gru_model import GRUModel
 from src.fl.data.loader import load_test_loader_for_server
 from src.fl.utils.logger import log_event
@@ -52,9 +52,9 @@ def main():
         # Client selection
         if mode == "aefl" and r > 1:
             metadata = load_round_metadata(r - 1)
-            chosen = select_clients_aefl(metadata, all_roles())
+            chosen = select_clients_aefl(metadata, ROLES())
         else:
-            chosen = select_all_clients(all_roles())
+            chosen = select_all_clients(ROLES())
 
         print(f"[SERVER] Selected clients: {chosen}")
 
