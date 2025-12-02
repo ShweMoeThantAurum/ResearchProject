@@ -39,3 +39,10 @@ def evaluate_global_model(state_dict, dataset):
     }
 
     return results
+
+def evaluate_final_model(state_dict, dataset):
+    """
+    Backwards-compatible wrapper.
+    Internally calls evaluate_global_model().
+    """
+    return evaluate_global_model(state_dict, dataset)
