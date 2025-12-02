@@ -1,27 +1,21 @@
 """
-Common evaluation metrics for traffic prediction.
-
-Provides MAE, RMSE, and MAPE implemented on top of PyTorch tensors.
+Standard regression metrics for traffic flow prediction.
 """
 
-import torch
+import numpy as np
 
 
-def mae(pred, true):
-    """Mean Absolute Error."""
-    return torch.mean(torch.abs(pred - true)).item()
+def mae(y_true, y_pred):
+    """Compute mean absolute error."""
+    return float(np.mean(np.abs(y_true - y_pred)))
 
 
-def rmse(pred, true):
-    """Root Mean Squared Error."""
-    return torch.sqrt(torch.mean((pred - true) ** 2)).item()
+def rmse(y_true, y_pred):
+    """Compute root mean squared error."""
+    return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
 
-def mape(pred, true, eps=1e-6):
-    """
-    Mean Absolute Percentage Error (in %).
-
-    Adds a small epsilon to avoid division by zero.
-    """
-    denom = torch.clamp(torch.abs(true), min=eps)
-    return (torch.mean(torch.abs((pred - true) / denom)) * 100.0).item()
+def mape(y_true, y_pred):
+    """Compute mean absolute percentage error."""
+    eps = 1e-6
+    return float(np.mean(np.abs((y_true - y_pred) / (y_true + eps))))

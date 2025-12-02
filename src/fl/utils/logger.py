@@ -1,47 +1,44 @@
 """
-Lightweight logging helpers for federated learning runs.
-
-Provides a simple JSONL logger and a timer utility for measuring latency
-and durations throughout client and server execution.
+Lightweight logging utilities for federated learning runs.
 """
 
 import os
-import json
 import time
-from typing import Any, Dict
 
-LOG_DIR = os.path.join("outputs", "logs")
-os.makedirs(LOG_DIR, exist_ok=True)
+# All plain-text logs go under this directory.
+LOG_DIR = "outputs/logs"
+
+
+def _ensure_log_dir():
+    """Create the log directory if it does not exist."""
+    if not os.path.exists(LOG_DIR):
+        os.makedirs(LOG_DIR)
+
+
+def log_event(message, role=None):
+    """Append a log line to a file and print it to the console."""
+    _ensure_log_dir()
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Optional role prefix such as [roadside], [server], etc.
+    prefix = "[{}]".format(role) if role else ""
+    line = "{} {} {}\n".format(ts, prefix, message)
+
+    path = os.path.join(LOG_DIR, "events.log")
+    with open(path, "a") as f:
+        f.write(line)
+
+    # Mirror logs to stdout for real-time observation.
+    print(line.strip())
 
 
 class Timer:
-    """Small helper for measuring elapsed wall-clock seconds."""
+    """Measure elapsed wall-clock time."""
 
     def __init__(self):
-        """Prepare timer with no active start."""
-        self._start = None
+        """Start the timer."""
+        self.start = time.time()
 
-    def start(self):
-        """Start timing."""
-        self._start = time.time()
-
-    def stop(self):
-        """Stop timing and return elapsed seconds."""
-        if self._start is None:
-            return 0.0
-        elapsed = time.time() - self._start
-        self._start = None
-        return elapsed
-
-
-def log_event(filename, event):
-    """
-    Append an event as a JSON line into outputs/logs/<filename>.
-
-    Each event is enriched with a UNIX timestamp if missing.
-    """
-    path = os.path.join(LOG_DIR, filename)
-    event = dict(event)
-    event.setdefault("ts", time.time())
-    with open(path, "a") as f:
-        f.write(json.dumps(event) + "\n")
+    def elapsed(self):
+        """Return elapsed time in seconds."""
+        return time.time() - self.start
