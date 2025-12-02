@@ -1,17 +1,17 @@
 """
-Aggregation strategies for federated learning.
+Model aggregation strategies.
 
-Implements:
-- FedAvg (equal weighting)
-- FedProx (same aggregation as FedAvg on server)
-- AEFL (currently same as FedAvg)
+Includes:
+    - FedAvg
+    - FedProx (same aggregation here)
+    - AEFL (same as FedAvg for now)
 """
 
 import torch
 
 
 def aggregate_fedavg(states):
-    """Average all client update tensors equally."""
+    """Simple average over client updates."""
     if not states:
         return {}
 
@@ -19,17 +19,17 @@ def aggregate_fedavg(states):
     base = states[roles[0]]
 
     avg = {}
-    for name in base.keys():
+    for name in base:
         tensors = [states[r][name].float() for r in roles]
         avg[name] = sum(tensors) / float(len(tensors))
     return avg
 
 
-def aggregate_aefl(states):
-    """AEFL currently uses FedAvg aggregation."""
+def aggregate_fedprox(states):
+    """FedProx server aggregation = FedAvg."""
     return aggregate_fedavg(states)
 
 
-def aggregate_fedprox(states):
-    """FedProx uses FedAvg on the server side."""
+def aggregate_aefl(states):
+    """AEFL currently uses FedAvg aggregation."""
     return aggregate_fedavg(states)

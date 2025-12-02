@@ -1,38 +1,31 @@
 """
-Generate run summaries for the final evaluation outputs.
-
-Writes:
-- summary CSV (MAE, RMSE, MAPE)
-- final_metrics JSON
+Generate CSV and JSON summaries for the experiment.
 """
 
 import os
-import csv
-from src.fl.utils.serialization import save_json
+import json
+import pandas as pd
 
 
-def generate_cloud_summary(metrics, rounds, mode, dataset="unknown"):
-    """
-    Save summary results into:
-        outputs/summaries/<dataset>/<mode>/
-    """
-    out_dir = os.path.join("outputs", "summaries", dataset, mode.lower())
+def generate_cloud_summary(metrics, dataset, mode, rounds):
+    out_dir = os.path.join("outputs", "summaries", dataset, mode)
     os.makedirs(out_dir, exist_ok=True)
 
-    csv_path = os.path.join(out_dir, "summary_%s.csv" % mode.lower())
-    json_path = os.path.join(out_dir, "final_metrics_%s.json" % mode.lower())
+    csv_path = os.path.join(out_dir, "summary_%s.csv" % mode)
+    json_path = os.path.join(out_dir, "final_metrics_%s.json" % mode)
 
-    # Write CSV
-    with open(csv_path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["metric", "value"])
-        for k, v in metrics.items():
-            w.writerow([k, v])
+    df = pd.DataFrame([metrics])
+    df.to_csv(csv_path, index=False)
 
-    # Write JSON
-    save_json(json_path, metrics)
+    with open(json_path, "w") as f:
+        json.dump({
+            "dataset": dataset,
+            "mode": mode,
+            "rounds": rounds,
+            "metrics": metrics,
+        }, f, indent=2)
 
-    print("[SERVER] Summary saved | dataset=%s | mode=%s" % (dataset, mode))
+    print("[SERVER] Summary saved to:")
     print(" ", csv_path)
     print(" ", json_path)
 
