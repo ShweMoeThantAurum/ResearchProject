@@ -49,3 +49,10 @@ def save_experiment_summary(final_metrics, round_records):
         print(" ", csv_path)
 
     return metrics_path, csv_path
+
+def generate_cloud_summary(final_metrics, round_records):
+    """
+    Backwards-compat wrapper expected by server_main.py.
+    Calls save_experiment_summary() under the hood.
+    """
+    return save_experiment_summary(final_metrics, round_records)
