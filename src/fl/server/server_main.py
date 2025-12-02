@@ -1,119 +1,131 @@
 """
-Main server loop for federated learning.
-Handles:
-- loading global state
-- selecting clients (FedAvg, FedProx, AEFL)
-- collecting updates
-- aggregation
-- evaluation
-- saving summaries
+Main server orchestration loop for federated learning.
+Coordinates S3 cleanup, per-round client updates, aggregation, and evaluation.
 """
 
-import os
-import json
 import time
 
-import torch
+from ..models.gru_model import GRUModel
+from ..utils.logger import log_event
+from .utils_server import (
+    get_dataset,
+    get_fl_mode,
+    get_fl_rounds,
+    get_hidden_size,
+    ROLES,
+)
+from .aggregation import aggregate_fedavg, aggregate_fedprox, aggregate_aefl
+from .selection import select_all_clients, select_clients_aefl
+from .s3_io import clear_all_rounds, upload_global_model, download_client_update, load_round_metadata
+from .evaluate import evaluate_global_model
+from .summary import save_experiment_summary
 
-from src.fl.config import settings
-from src.fl.models import SimpleGRU
-from src.fl.server.selection import select_all_clients, select_clients_aefl
-from src.fl.server.aggregation import aggregate_fedavg, aggregate_fedprox, aggregate_aefl
-from src.fl.server.evaluate import evaluate_final_model
-from src.fl.server.summary import write_summary
-from src.fl.server.s3_io import load_update, load_round_metadata, save_global_state
-from src.fl.server.utils_server import init_global_model, ensure_dirs
-from src.fl.config.config_loader import load_config
+
+def _init_global_state(num_nodes, hidden_size):
+    """Initialise GRU model and return its state dict."""
+    model = GRUModel(num_nodes=num_nodes, hidden_size=hidden_size)
+    return model.state_dict()
 
 
-ROLES = ["roadside", "vehicle", "sensor", "camera", "bus"]
+def _infer_num_nodes_from_dataset(dataset):
+    """Infer node count by loading a test loader."""
+    from ..data.loader import load_test_loader_for_server
+    loader, num_nodes = load_test_loader_for_server(dataset, batch_size=1)
+    return num_nodes
 
 
 def main():
-    mode = settings.get_fl_mode()
-    rounds = settings.get_fl_rounds()
-    hidden = settings.get_hidden_size()
+    """Run the FL server training loop."""
+    dataset = get_dataset()
+    mode = get_fl_mode()
+    rounds = get_fl_rounds()
+    hidden_size = get_hidden_size()
 
-    print("[SERVER] Starting | mode={} rounds={} hidden={}".format(mode, rounds, hidden))
+    print(f"[SERVER] Starting | dataset={dataset}, mode={mode}, rounds={rounds}, hidden={hidden_size}")
+    log_event(f"[SERVER] Starting | dataset={dataset}, mode={mode}, rounds={rounds}, hidden={hidden_size}")
 
-    ensure_dirs()
+    clear_all_rounds()
 
-    # Initialise global model
-    global_state = init_global_model(hidden)
+    num_nodes = _infer_num_nodes_from_dataset(dataset)
+    print(f"[SERVER] Inferred num_nodes={num_nodes}")
 
-    # Save initial global model (round 1)
-    save_global_state(global_state, 1)
+    global_state = _init_global_state(num_nodes, hidden_size)
 
-    # FL rounds
+    upload_global_model(round_id=1, state_dict=global_state)
+
+    round_records = []
+
     for r in range(1, rounds + 1):
-        print("\n========== ROUND {} ==========".format(r))
+        print(f"\n[SERVER] ===== ROUND {r} =====")
 
-        # -----------------------
-        # Client selection
-        # -----------------------
         if mode == "AEFL" and r > 1:
-            metadata = load_round_metadata(r - 1)
-            chosen = select_clients_aefl(metadata, ROLES)
+            meta_prev = load_round_metadata(r - 1)
+            chosen = select_clients_aefl(meta_prev)
         else:
-            chosen = select_all_clients(ROLES)
+            chosen = select_all_clients()
 
-        print("[SERVER] Selected clients:", chosen)
+        print(f"[SERVER] Selected clients: {chosen}")
 
-        # -----------------------
-        # Collect updates
-        # -----------------------
         updates = {}
         start_wait = time.time()
-        timeout = 300
+        timeout_sec = 300
 
-        print("[SERVER] Waiting for updates...")
-
+        # Wait for all selected client updates
         while len(updates) < len(chosen):
             for role in chosen:
-                if role not in updates:
-                    upd = load_update(role, r)
-                    if upd is not None:
-                        updates[role] = upd
-                        print("[SERVER] Received {} ({}/{})".format(
-                            role, len(updates), len(chosen)
-                        ))
+                if role in updates:
+                    continue
+                state = download_client_update(r, role)
+                if state is not None:
+                    updates[role] = state
+                    print(f"[SERVER] Received update from {role} ({len(updates)}/{len(chosen)})")
 
             if len(updates) == len(chosen):
                 break
 
-            if time.time() - start_wait > timeout:
-                print("[SERVER] WARNING: Timeout waiting for updates")
+            if time.time() - start_wait > timeout_sec:
+                print("[SERVER] WARNING: Timeout waiting for updates.")
                 break
 
-            time.sleep(1)
+            time.sleep(2)
 
-        # -----------------------
-        # Aggregation
-        # -----------------------
-        if mode == "AEFL":
-            global_state = aggregate_aefl(updates)
-        elif mode == "FedAvg":
+        if not updates:
+            print("[SERVER] No updates received this round; stopping early.")
+            break
+
+        # Aggregate according to mode
+        if mode == "FedAvg":
             global_state = aggregate_fedavg(updates)
         elif mode == "FedProx":
             global_state = aggregate_fedprox(updates)
+        elif mode == "AEFL":
+            global_state = aggregate_aefl(updates)
         elif mode == "LocalOnly":
             global_state = aggregate_fedavg(updates)
         else:
             global_state = aggregate_fedavg(updates)
 
-        # Save global model for next round
+        # Upload next global model if more rounds remain
         if r < rounds:
-            save_global_state(global_state, r + 1)
+            upload_global_model(round_id=r + 1, state_dict=global_state)
 
-    # -----------------------
+        round_records.append({
+            "round": r,
+            "num_selected": len(chosen),
+            "selected_clients": ",".join(chosen),
+            "num_updates": len(updates),
+        })
+
     # Final evaluation
-    # -----------------------
-    metrics = evaluate_final_model(global_state)
+    final_metrics = evaluate_global_model(global_state, dataset)
 
-    print("\n[SERVER] Final Evaluation:")
-    for k, v in metrics.items():
-        print(" {} = {:.6f}".format(k, v))
+    print("\n[SERVER] Final evaluation metrics:")
+    for k, v in final_metrics.items():
+        print(f"  {k}: {v:.6f}")
 
-    write_summary(metrics, mode)
+    save_experiment_summary(final_metrics, round_records)
+    print(f"[SERVER] Training finished after {len(round_records)} effective rounds.")
 
-    print("[SERVER] Training complete.")
+
+if __name__ == "__main__":
+    main()
