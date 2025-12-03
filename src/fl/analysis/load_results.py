@@ -6,6 +6,7 @@ Provides clean access to MAE, RMSE, MAPE, and energy totals.
 import os
 import csv
 import json
+import glob
 
 
 def _summary_path(dataset, mode):
@@ -14,6 +15,10 @@ def _summary_path(dataset, mode):
 
 def _metrics_path(dataset, mode):
     return f"outputs/summaries/{dataset}/{mode}/final_metrics_{mode}.json"
+
+
+def _energy_dir(dataset, mode):
+    return f"outputs/summaries/{dataset}/{mode}/energy"
 
 
 def load_metrics(dataset, mode):
@@ -38,3 +43,26 @@ def load_summary(dataset, mode):
             rows.append(row)
 
     return rows
+
+
+def load_energy_totals(dataset, mode):
+    """
+    Load per-client total energy from JSON summaries.
+
+    Returns:
+        dict: {role: total_energy_j}
+    """
+    energy_dir = _energy_dir(dataset, mode)
+    if not os.path.isdir(energy_dir):
+        raise FileNotFoundError(f"Energy directory not found: {energy_dir}")
+
+    energies = {}
+    pattern = os.path.join(energy_dir, "*.json")
+
+    for path in glob.glob(pattern):
+        with open(path, "r") as f:
+            data = json.load(f)
+        role = data.get("role") or os.path.splitext(os.path.basename(path))[0]
+        energies[role] = float(data.get("total_energy_j", 0.0))
+
+    return energies

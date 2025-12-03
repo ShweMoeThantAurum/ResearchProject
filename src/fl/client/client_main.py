@@ -4,6 +4,7 @@ Loads local dataset, trains GRU model, computes energy, applies DP/compression,
 uploads update + metadata to S3 for each round.
 """
 
+import os
 import time
 import torch
 
@@ -18,6 +19,7 @@ from src.fl.client.comm import (
     upload_metadata,
 )
 from src.fl.utils.logger import log_event
+from src.fl.utils.serialization import save_json
 from src.fl.client.utils_client import get_role, get_dataset
 from src.fl.client.utils_client import compute_bandwidth_mbps
 
@@ -75,7 +77,6 @@ def main():
                 f"type={type(global_state)} error={e}"
             )
             # Continue with existing model weights (local state)
-
 
         # ----------------------------------------------
         # Local training + DP + compression
@@ -152,6 +153,29 @@ def main():
     log_event(
         f"[{role}] client_finished rounds={rounds} total_energy_j={total_energy_j:.3f}"
     )
+
+    # ----------------------------------------------
+    # Save per-client energy summary for analysis
+    # ----------------------------------------------
+    energy_dir = os.path.join(
+        "outputs",
+        "summaries",
+        dataset,
+        settings.fl_mode,
+        "energy",
+    )
+    os.makedirs(energy_dir, exist_ok=True)
+
+    energy_path = os.path.join(energy_dir, f"{role}.json")
+    energy_payload = {
+        "dataset": dataset,
+        "mode": settings.fl_mode,
+        "role": role,
+        "rounds": rounds,
+        "total_energy_j": float(total_energy_j),
+    }
+    save_json(energy_path, energy_payload)
+    print(f"[{role}] Saved energy summary to {energy_path}")
 
 
 if __name__ == "__main__":

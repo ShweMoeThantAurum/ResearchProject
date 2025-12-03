@@ -5,41 +5,34 @@ Used for Experiment 2: Energy Comparison.
 
 import os
 import matplotlib.pyplot as plt
+
+from .load_results import load_energy_totals
 from .plot_utils import base_plot, ensure_plot_dir
-
-# Each client end-of-training prints:
-#   "[role] Finished 20 rounds. Total estimated energy=36.40 J."
-# We parse this from logs.
-
-
-def parse_energy_from_logs(dataset, mode):
-    """Extract total energy from client log files."""
-    log_path = "outputs/logs/events.log"
-    energies = {}
-
-    with open(log_path, "r") as f:
-        for line in f:
-            if f"{dataset}" not in line or mode not in line:
-                continue
-            if "Total estimated energy" in line:
-                parts = line.strip().split()
-                role = parts[1].strip("[]")
-                value = float(parts[-2])
-                energies[role] = value
-
-    return energies
 
 
 def plot_energy(dataset, mode):
-    """Plot per-client total energy."""
+    """
+    Plot per-client total energy for a given dataset/mode.
+
+    Reads:
+        outputs/summaries/<dataset>/<mode>/energy/<role>.json
+    """
     out_dir = ensure_plot_dir(dataset, "energy")
 
-    energies = parse_energy_from_logs(dataset, mode)
-    roles = list(energies.keys())
-    values = list(energies.values())
+    energies = load_energy_totals(dataset, mode)
+    if not energies:
+        raise ValueError(f"No energy summaries found for {dataset} / {mode}")
 
-    base_plot(f"{dataset.upper()} - {mode.upper()} Energy", "Client Role", "Energy (J)")
+    roles = list(sorted(energies.keys()))
+    values = [energies[r] for r in roles]
+
+    base_plot(
+        f"{dataset.upper()} - {mode.upper()} Total Client Energy",
+        "Client Role",
+        "Energy (J)",
+    )
     plt.bar(roles, values)
+    plt.tight_layout()
     plt.savefig(os.path.join(out_dir, f"{dataset}_{mode}_energy.png"))
     plt.close()
 
