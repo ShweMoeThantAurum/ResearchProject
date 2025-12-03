@@ -14,6 +14,7 @@ import time
 import torch
 
 from src.fl.config.settings import settings
+from src.fl.config.config_loader import load_experiment_config
 from src.fl.server.selection import select_all_clients, select_clients_aefl
 from src.fl.server.aggregation import (
     aggregate_fedavg,
@@ -21,7 +22,7 @@ from src.fl.server.aggregation import (
     aggregate_aefl,
 )
 from src.fl.server.evaluate import evaluate_final_model
-from src.fl.server.summary import generate_cloud_summary, log_round_summary
+from src.fl.server.summary import generate_cloud_summary
 from src.fl.server.s3_io import (
     download_client_update,
     load_round_metadata,
@@ -41,6 +42,11 @@ def _infer_num_nodes(dataset: str) -> int:
 
 def main():
     """Run the federated learning server loop."""
+    # ------------------------------------------------
+    # Load YAML configuration (baseline + optional overlays)
+    # ------------------------------------------------
+    load_experiment_config()
+
     dataset = get_dataset()
     mode = get_fl_mode()
     rounds = settings.fl_rounds
@@ -129,17 +135,6 @@ def main():
 
         aggr_time = time.time() - start_aggr
         print(f"[SERVER] Aggregation complete | time={aggr_time:.3f}s")
-
-        # ------------------------------------------------
-        # Log per-round summary for analysis
-        # ------------------------------------------------
-        log_round_summary(
-            round_id=r,
-            selected_clients=chosen,
-            num_updates=len(updates),
-            aggregation_time_s=aggr_time,
-            mode_label=mode,
-        )
 
         # Upload next-round global model
         next_round = r + 1

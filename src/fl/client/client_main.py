@@ -4,11 +4,11 @@ Loads local dataset, trains GRU model, computes energy, applies DP/compression,
 uploads update + metadata to S3 for each round.
 """
 
-import os
 import time
 import torch
 
 from src.fl.config.settings import settings
+from src.fl.config.config_loader import load_experiment_config
 from src.fl.data.loader import load_client_partition
 from src.fl.models.gru_model import GRUModel
 from src.fl.client.train import train_one_epoch
@@ -19,13 +19,17 @@ from src.fl.client.comm import (
     upload_metadata,
 )
 from src.fl.utils.logger import log_event
-from src.fl.utils.serialization import save_json
 from src.fl.client.utils_client import get_role, get_dataset
 from src.fl.client.utils_client import compute_bandwidth_mbps
 
 
 def main():
     """Entry point for each FL client."""
+    # --------------------------------------------------
+    # Load YAML configuration (baseline + optional overlays)
+    # --------------------------------------------------
+    load_experiment_config()
+
     # Role / dataset from env (with settings as fallback)
     role = settings.client_role or get_role()
     dataset = settings.dataset or get_dataset()
@@ -153,29 +157,6 @@ def main():
     log_event(
         f"[{role}] client_finished rounds={rounds} total_energy_j={total_energy_j:.3f}"
     )
-
-    # ----------------------------------------------
-    # Save per-client energy summary for analysis
-    # ----------------------------------------------
-    energy_dir = os.path.join(
-        "outputs",
-        "summaries",
-        dataset,
-        settings.fl_mode,
-        "energy",
-    )
-    os.makedirs(energy_dir, exist_ok=True)
-
-    energy_path = os.path.join(energy_dir, f"{role}.json")
-    energy_payload = {
-        "dataset": dataset,
-        "mode": settings.fl_mode,
-        "role": role,
-        "rounds": rounds,
-        "total_energy_j": float(total_energy_j),
-    }
-    save_json(energy_path, energy_payload)
-    print(f"[{role}] Saved energy summary to {energy_path}")
 
 
 if __name__ == "__main__":
