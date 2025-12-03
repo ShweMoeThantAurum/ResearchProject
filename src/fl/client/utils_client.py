@@ -1,6 +1,6 @@
 """
 Client-side helpers for configuration, metadata, and housekeeping.
-Reads environment variables and builds per-round metadata.
+Provides role/dataset access and metadata builders.
 """
 
 import os
@@ -12,52 +12,12 @@ from ..utils.logger import log_event
 
 def get_role():
     """Return client role name."""
-    return os.environ.get("CLIENT_ROLE", "roadside").strip()
+    return os.environ.get("CLIENT_ROLE", "roadside").strip().lower()
 
 
 def get_dataset():
     """Return dataset name."""
     return os.environ.get("DATASET", "sz").strip().lower()
-
-
-def get_fl_mode():
-    """Return FL mode (AEFL, FedAvg, FedProx, LocalOnly)."""
-    return os.environ.get("FL_MODE", "AEFL").strip()
-
-
-def get_fl_rounds():
-    """Return number of federated rounds."""
-    return int(os.environ.get("FL_ROUNDS", "20"))
-
-
-def get_batch_size():
-    """Return local mini-batch size."""
-    return int(os.environ.get("BATCH_SIZE", "64"))
-
-
-def get_local_epochs():
-    """Return number of local epochs per round."""
-    return int(os.environ.get("LOCAL_EPOCHS", "1"))
-
-
-def get_lr():
-    """Return client learning rate."""
-    return float(os.environ.get("LR", "0.001"))
-
-
-def get_hidden_size():
-    """Return GRU hidden size."""
-    return int(os.environ.get("HIDDEN_SIZE", "64"))
-
-
-def get_device_power_watts():
-    """Return average device power consumption."""
-    return float(os.environ.get("DEVICE_POWER_WATTS", "3.5"))
-
-
-def get_net_j_per_mb():
-    """Return energy cost per MB of communication."""
-    return float(os.environ.get("NET_J_PER_MB", "0.6"))
 
 
 def compute_bandwidth_mbps(payload_bytes, upload_latency_sec):

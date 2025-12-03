@@ -1,6 +1,6 @@
 """
 Local training loop for FL clients.
-Supports FedAvg, AEFL, FedProx and LocalOnly modes.
+Supports FedAvg, AEFL, FedProx, and LocalOnly modes.
 """
 
 import torch
@@ -19,7 +19,7 @@ def train_one_round(model,
                     lr,
                     mode,
                     global_state=None):
-    """Train model for one FL round and return updated weights."""
+    """Train model locally for one round and return updated state."""
     model.to(device)
     model.train()
 
@@ -27,17 +27,15 @@ def train_one_round(model,
     loss_fn = torch.nn.MSELoss()
 
     use_prox = mode.lower() == "fedprox" and global_state is not None
-    global_params = None
 
+    global_params = None
     if use_prox:
-        # Clone global parameters as FedProx reference
+        # Copy global parameters as FedProx reference
         global_params = [global_state[k].to(device) for k in model.state_dict().keys()]
 
     total_loss = 0.0
     total_batches = 0
     total_samples = 0
-
-    # Simple FLOPs estimate per batch (very rough)
     approx_flops = 0.0
 
     for _ in range(local_epochs):
@@ -63,28 +61,19 @@ def train_one_round(model,
             total_batches += 1
             total_samples += batch_size
 
-            # Approximate GRU cost ~ O(seq_len * hidden * nodes)
+            # Very rough FLOPs estimate for GRU workload
             seq_len = X.size(1)
             num_nodes = X.size(2)
-            hidden = next(model.parameters()).numel() // num_nodes
+            hidden = next(model.parameters()).numel() // max(1, num_nodes)
             approx_flops += float(batch_size * seq_len * num_nodes * hidden)
 
     avg_loss = total_loss / max(1, total_batches)
 
-    log_event({
-        "type": "client_train",
-        "role": role,
-        "round": round_id,
-        "mode": mode,
-        "local_epochs": local_epochs,
-        "lr": lr,
-        "avg_loss": avg_loss,
-        "batches": total_batches,
-        "samples": total_samples,
-        "approx_flops": approx_flops,
-    })
+    log_event(
+        f"[{role}] round={round_id} mode={mode} "
+        f"loss={avg_loss:.6f} batches={total_batches} samples={total_samples}"
+    )
 
     state_cpu = {k: v.detach().cpu() for k, v in model.state_dict().items()}
 
-    # Time is measured outside this function by the caller
     return state_cpu, avg_loss, total_samples, approx_flops

@@ -12,9 +12,8 @@ LOG_DIR = "outputs/logs"
 
 
 def ensure_log_dir():
-    """Create log directory if missing."""
-    if not os.path.exists(LOG_DIR):
-        os.makedirs(LOG_DIR)
+    """Create log directory if missing (race-safe across many processes)."""
+    os.makedirs(LOG_DIR, exist_ok=True)
 
 
 def timestamp():

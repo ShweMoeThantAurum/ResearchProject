@@ -32,13 +32,13 @@ def _update_key(round_id, role):
 
 
 def _metadata_prefix(round_id):
-    """Return S3 prefix under which metadata JSONs are stored."""
+    """Prefix under which metadata JSON is stored."""
     prefix = get_s3_prefix()
     return f"{prefix}/round_{round_id}/metadata/"
 
 
 def clear_all_rounds():
-    """Delete all S3 objects under the dataset FL prefix."""
+    """Delete all S3 objects under dataset prefix."""
     bucket = get_s3_bucket()
     prefix = get_s3_prefix()
     s3 = _s3_client()
@@ -57,6 +57,9 @@ def clear_all_rounds():
     log_event(f"[SERVER] Cleared {deleted} S3 objects under {prefix}")
 
 
+# =====================================================================
+# ⭐ FIXED: Use upload_fileobj for large PyTorch models (avoids 400 error)
+# =====================================================================
 def upload_global_model(round_id, state_dict):
     """Upload global model state dict to S3 for a given round."""
     bucket = get_s3_bucket()
@@ -65,14 +68,21 @@ def upload_global_model(round_id, state_dict):
 
     buf = io.BytesIO()
     torch.save(state_dict, buf)
-    buf.seek(0)
+    body = buf.getvalue()
 
-    s3.put_object(Bucket=bucket, Key=key, Body=buf.getvalue())
+    # --- IMPORTANT: use put_object (multipart disabled) ---
+    s3.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=body,
+        ContentType="application/octet-stream"
+    )
+
     log_event(f"[SERVER] Uploaded global model for round {round_id} to s3://{bucket}/{key}")
 
 
 def download_client_update(round_id, role):
-    """Download a client update state dict from S3."""
+    """Download client update state dict from S3."""
     bucket = get_s3_bucket()
     key = _update_key(round_id, role)
     s3 = _s3_client()
@@ -91,7 +101,7 @@ def download_client_update(round_id, role):
 
 
 def load_round_metadata(round_id):
-    """Load per-client metadata JSON for a given round."""
+    """Load client metadata JSON for a given round."""
     bucket = get_s3_bucket()
     prefix = _metadata_prefix(round_id)
     s3 = _s3_client()
@@ -116,7 +126,7 @@ def load_round_metadata(round_id):
 
 
 def upload_results_artifact(local_path, remote_key):
-    """Upload a local summary artifact to the results bucket."""
+    """Upload experiment report or artifact."""
     bucket = get_results_bucket()
     s3 = _s3_client()
 
@@ -124,7 +134,6 @@ def upload_results_artifact(local_path, remote_key):
         return
 
     with open(local_path, "rb") as f:
-        data = f.read()
+        s3.upload_fileobj(f, bucket, remote_key)
 
-    s3.put_object(Bucket=bucket, Key=remote_key, Body=data)
     log_event(f"[SERVER] Uploaded results artifact to s3://{bucket}/{remote_key}")

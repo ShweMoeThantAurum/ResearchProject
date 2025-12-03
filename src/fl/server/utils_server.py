@@ -44,11 +44,11 @@ def get_s3_bucket():
 
 def get_s3_prefix():
     """
-    Prefix for storing updates in S3:
-    fl/<dataset>/<mode>/
+    Correct S3 prefix:
+    fl/<dataset>/<FL_MODE>   # Mode must be uppercase and no bucket-name duplication
     """
-    dataset = _get_env("DATASET", "sz")
-    mode = _get_env("FL_MODE", "AEFL").lower()
+    dataset = _get_env("DATASET", "sz").lower()
+    mode = _get_env("FL_MODE", "AEFL").upper()  # KEEP UPPERCASE
     return f"fl/{dataset}/{mode}"
 
 
