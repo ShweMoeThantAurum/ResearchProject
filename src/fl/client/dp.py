@@ -1,36 +1,27 @@
 """
-Local differential privacy utilities for client updates.
-Adds Gaussian noise to model parameters when enabled.
+Differential Privacy noise addition for client updates.
 """
 
-import os
 import torch
 
 
-def _dp_enabled():
-    """Return True if DP is enabled via environment variable."""
-    return os.environ.get("DP_ENABLED", "false").strip().lower() == "true"
+def apply_dp_noise(update_dict, sigma=0.0):
+    """
+    Adds Gaussian noise to each tensor in the update.
 
+    Args:
+        update_dict: dict of parameter_name -> torch.Tensor
+        sigma: std dev of Gaussian noise
 
-def _dp_sigma():
-    """Return Gaussian noise standard deviation for DP."""
-    return float(os.environ.get("DP_SIGMA", "0.01"))
+    Returns:
+        dict with same keys, noise-added tensors
+    """
+    if sigma <= 0:
+        return update_dict
 
-
-def apply_dp_if_enabled(state_dict, role, round_id):
-    """Optionally add Gaussian noise to model parameters."""
-    if not _dp_enabled():
-        return state_dict
-
-    sigma = _dp_sigma()
     noisy = {}
+    for k, v in update_dict.items():
+        noise = torch.randn_like(v) * sigma
+        noisy[k] = v + noise
 
-    for k, v in state_dict.items():
-        if isinstance(v, torch.Tensor):
-            noise = torch.randn_like(v) * sigma
-            noisy[k] = v + noise
-        else:
-            noisy[k] = v
-
-    print(f"[{role}] Applied DP noise (sigma={sigma}) at round {round_id}")
     return noisy

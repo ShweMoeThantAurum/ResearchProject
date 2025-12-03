@@ -7,18 +7,20 @@ compression or DP noise, and uploads its update + metadata to S3.
 """
 
 import time
+import torch
+
 from src.fl.config.settings import settings
 from src.fl.data.loader import load_client_partition
 from src.fl.models.gru_model import GRUModel
 from src.fl.client.train import train_one_round
 from src.fl.client.energy import compute_energy
+from src.fl.client.dp import apply_dp_noise
+from src.fl.client.compression import compress_update
 from src.fl.client.comm import (
     download_global_model,
     upload_update,
-    upload_metadata
+    upload_metadata,
 )
-from src.fl.client.dp import apply_dp_noise
-from src.fl.client.compression import compress_update
 from src.fl.utils.logger import log_event
 
 
@@ -29,10 +31,8 @@ def main():
 
     log_event(role, f"Starting client for dataset={dataset}")
 
-    # Load local dataset partition
     loader = load_client_partition(dataset, role)
 
-    # Initialise model
     model = GRUModel(hidden_size=settings.hidden_size)
 
     total_energy = 0.0
@@ -40,27 +40,25 @@ def main():
     for r in range(1, rounds + 1):
         print(f"[{role}] ===== ROUND {r} =====")
 
-        # Download global model parameters
-        state = download_global_model(r)
-        model.load_state_dict(state)
+        # Download global model and load into memory
+        state_dict = download_global_model(r, role)
+        model.load_state_dict(state_dict)
 
-        # Train locally for one round
+        # Local training
         start = time.time()
         loss = train_one_round(model, loader, settings)
         train_time = time.time() - start
 
-        # Create update dictionary
+        # Prepare update
         update = {k: v.cpu() for k, v in model.state_dict().items()}
 
-        # Optional DP
         if settings.dp_enabled:
             update = apply_dp_noise(update, sigma=settings.dp_sigma)
 
-        # Optional Compression
         if settings.compression_enabled:
             update = compress_update(update, settings)
 
-        # Compute energy
+        # Energy computation
         energy, breakdown = compute_energy(
             compute_time=train_time,
             model_size_mb=settings.model_size_mb,
@@ -70,8 +68,8 @@ def main():
         total_energy += energy
 
         # Upload update + metadata
-        upload_update(role, r, update)
-        upload_metadata(role, r, {
+        upload_update(r, role, update)
+        upload_metadata(r, role, {
             "bandwidth_mbps": breakdown["bandwidth"],
             "total_energy_j": energy
         })
