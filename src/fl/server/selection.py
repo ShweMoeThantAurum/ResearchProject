@@ -1,20 +1,20 @@
 """
-Client selection logic for server-side FL.
-Implements AEFL energy-aware selection based on client metadata.
+Client selection logic for server-side federated learning.
+Implements AEFL selection based on bandwidth and energy metadata.
 """
 
-from .utils_server import ROLES, get_aefl_clients_per_round
+from .utils_server import ROLES, get_aefl_max_clients
 
 
 def select_all_clients():
-    """Select all available roles."""
+    """Select all available client roles."""
     return list(ROLES)
 
 
 def _normalise(values):
     """Normalise a dict of numeric values into [0, 1]."""
     if not values:
-        return {k: 0.0 for k in values}
+        return {}
     vmax = max(values.values())
     if vmax <= 0:
         return {k: 0.0 for k in values}
@@ -22,7 +22,13 @@ def _normalise(values):
 
 
 def select_clients_aefl(metadata):
-    """Select AEFL clients using bandwidth and energy scores."""
+    """
+    Select AEFL clients using bandwidth and energy scores.
+
+    Favors clients with:
+    - higher uplink bandwidth
+    - lower total energy consumption.
+    """
     if not metadata:
         return select_all_clients()
 
@@ -34,7 +40,6 @@ def select_clients_aefl(metadata):
     bw_norm = _normalise(bw)
     en_norm = _normalise(en)
 
-    # Higher is better for bandwidth; lower is better for energy
     scores = {}
     for r in roles:
         bw_score = bw_norm.get(r, 0.0)
@@ -42,7 +47,7 @@ def select_clients_aefl(metadata):
         scores[r] = 0.6 * bw_score + 0.4 * en_score
 
     sorted_roles = sorted(roles, key=lambda k: scores[k], reverse=True)
-    k = min(get_aefl_clients_per_round(), len(sorted_roles))
+    k = min(get_aefl_max_clients(), len(sorted_roles))
     selected = sorted_roles[:k]
 
     print("[SERVER] AEFL scores:", scores)

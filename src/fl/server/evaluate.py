@@ -8,15 +8,15 @@ import torch
 from ..models.gru_model import GRUModel
 from ..utils.metrics import mae, rmse, mape
 from ..data.loader import load_test_loader_for_server
-from .utils_server import get_batch_size
+from ..config.settings import settings
 
 
 def evaluate_global_model(state_dict, dataset):
-    """Run evaluation on the roadside test partition."""
-    batch_size = get_batch_size()
-    test_loader, num_nodes = load_test_loader_for_server(dataset, batch_size)
+    """Evaluate global model on the test split for a dataset."""
+    batch_size = settings.batch_size
+    test_loader = load_test_loader_for_server(dataset, batch_size=batch_size)
 
-    model = GRUModel(num_nodes=num_nodes, hidden_size=state_dict["decoder.weight"].shape[1])
+    model = GRUModel(hidden_size=settings.hidden_size)
     model.load_state_dict(state_dict)
     model.eval()
 
@@ -40,9 +40,7 @@ def evaluate_global_model(state_dict, dataset):
 
     return results
 
+
 def evaluate_final_model(state_dict, dataset):
-    """
-    Backwards-compatible wrapper.
-    Internally calls evaluate_global_model().
-    """
+    """Wrapper kept for clarity with server_main usage."""
     return evaluate_global_model(state_dict, dataset)

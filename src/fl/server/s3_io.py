@@ -1,11 +1,12 @@
 """
-S3 utilities for server-side FL orchestration.
-Handles global model upload and client update/metadata downloads.
+S3 utilities for server-side orchestration.
+Handles global model upload, client update download, and metadata loading.
 """
 
 import io
 import json
 import os
+
 import boto3
 import torch
 
@@ -32,13 +33,13 @@ def _update_key(round_id, role):
 
 
 def _metadata_prefix(round_id):
-    """Prefix under which metadata JSON is stored."""
+    """Return S3 prefix where metadata JSON files are stored."""
     prefix = get_s3_prefix()
     return f"{prefix}/round_{round_id}/metadata/"
 
 
 def clear_all_rounds():
-    """Delete all S3 objects under dataset prefix."""
+    """Delete all S3 objects under the current dataset/mode prefix."""
     bucket = get_s3_bucket()
     prefix = get_s3_prefix()
     s3 = _s3_client()
@@ -54,13 +55,10 @@ def clear_all_rounds():
         s3.delete_objects(Bucket=bucket, Delete={"Objects": batch})
         deleted += len(batch)
 
-    log_event(f"[SERVER] Cleared {deleted} S3 objects under {prefix}")
+    log_event(f"[SERVER] cleared_s3_objects bucket={bucket} prefix={prefix} count={deleted}")
 
 
-# =====================================================================
-# ⭐ FIXED: Use upload_fileobj for large PyTorch models (avoids 400 error)
-# =====================================================================
-def upload_global_model(round_id, state_dict):
+def upload_global_model(state_dict, round_id):
     """Upload global model state dict to S3 for a given round."""
     bucket = get_s3_bucket()
     key = _global_key(round_id)
@@ -69,20 +67,24 @@ def upload_global_model(round_id, state_dict):
     buf = io.BytesIO()
     torch.save(state_dict, buf)
     body = buf.getvalue()
+    size_mb = len(body) / (1024.0 * 1024.0)
 
-    # --- IMPORTANT: use put_object (multipart disabled) ---
     s3.put_object(
         Bucket=bucket,
         Key=key,
         Body=body,
-        ContentType="application/octet-stream"
+        ContentType="application/octet-stream",
     )
 
-    log_event(f"[SERVER] Uploaded global model for round {round_id} to s3://{bucket}/{key}")
+    log_event(
+        f"[SERVER] upload_global_model round={round_id} "
+        f"size_mb={size_mb:.3f} key=s3://{bucket}/{key}"
+    )
+    print(f"[SERVER] Uploaded global model r={round_id} ({size_mb:.3f} MB) to s3://{bucket}/{key}")
 
 
 def download_client_update(round_id, role):
-    """Download client update state dict from S3."""
+    """Download processed client update state dict from S3."""
     bucket = get_s3_bucket()
     key = _update_key(round_id, role)
     s3 = _s3_client()
@@ -96,7 +98,12 @@ def download_client_update(round_id, role):
     buf = io.BytesIO(raw)
     state = torch.load(buf, map_location="cpu")
 
-    log_event(f"[SERVER] Downloaded update for round {round_id} from role={role}")
+    size_mb = len(raw) / (1024.0 * 1024.0)
+    log_event(
+        f"[SERVER] download_update round={round_id} role={role} "
+        f"size_mb={size_mb:.3f} key=s3://{bucket}/{key}"
+    )
+
     return state
 
 
@@ -126,14 +133,18 @@ def load_round_metadata(round_id):
 
 
 def upload_results_artifact(local_path, remote_key):
-    """Upload experiment report or artifact."""
-    bucket = get_results_bucket()
-    s3 = _s3_client()
-
+    """Upload experiment summary or artifact to the results bucket."""
     if not os.path.exists(local_path):
         return
+
+    bucket = get_results_bucket()
+    s3 = _s3_client()
 
     with open(local_path, "rb") as f:
         s3.upload_fileobj(f, bucket, remote_key)
 
-    log_event(f"[SERVER] Uploaded results artifact to s3://{bucket}/{remote_key}")
+    log_event(
+        f"[SERVER] upload_results_artifact local={local_path} "
+        f"remote=s3://{bucket}/{remote_key}"
+    )
+    print(f"[SERVER] Uploaded results artifact to s3://{bucket}/{remote_key}")

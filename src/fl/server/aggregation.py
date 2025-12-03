@@ -1,6 +1,6 @@
 """
-Aggregation strategies for server-side FL updates.
-Implements FedAvg-style averaging and an AEFL variant.
+Aggregation strategies for server-side federated learning.
+Implements FedAvg-style parameter averaging.
 """
 
 import torch
@@ -29,10 +29,10 @@ def aggregate_fedavg(states):
 
 
 def aggregate_fedprox(states):
-    """FedProx uses the same server-side aggregation as FedAvg."""
+    """FedProx uses same server-side aggregation as FedAvg."""
     return _aggregate_mean(states)
 
 
 def aggregate_aefl(states):
-    """AEFL aggregation currently uses equal-weight averaging."""
+    """AEFL currently uses equal-weight averaging on selected clients."""
     return _aggregate_mean(states)
