@@ -1,132 +1,121 @@
 """
-Client entrypoint for federated learning.
-
-Each client:
-- loads its local dataset partition
-- receives global models from the server
-- trains locally on CPU
-- applies optional DP and compression
-- computes simple energy estimates
-- uploads updates and metadata to S3.
+Client-side federated learning loop.
+Loads local dataset, trains GRU model, computes energy, applies DP/compression,
+uploads update + metadata to S3 for each round.
 """
 
+import os
 import time
 import torch
+import json
 
-from src.fl.config.settings import settings
-from src.fl.data.loader import load_client_partition
-from src.fl.models.gru_model import GRUModel
-from src.fl.client.train import train_one_round
-from src.fl.client.energy import compute_energy
-from src.fl.client.dp import apply_dp_noise
-from src.fl.client.compression import compress_update
-from src.fl.client.comm import (
-    download_global_model,
-    upload_update,
-    upload_metadata,
-)
-from src.fl.client.utils_client import (
-    get_role,
-    get_dataset,
-    build_round_metadata,
-)
-from src.fl.utils.logger import log_event
+from .train import train_one_epoch
+from .energy import estimate_energy
+from .comm import upload_update, download_global_model
+from .utils_client import load_client_partition
+from ..models.gru_model import GRUModel
+from ..config.settings import load_settings
+from ..utils.logger import log_event
 
 
 def main():
-    """Run one client process for all FL rounds."""
-    role = get_role()
-    dataset = get_dataset()
-    rounds = settings.fl_rounds
-    mode = settings.fl_mode
+    """Entry point for each FL client."""
+    settings = load_settings()
 
-    # CPU-only training for AWS Academy; GPU can be future work.
-    device = torch.device("cpu")
+    role = settings.role
+    dataset = settings.dataset
+    rounds = settings.rounds
 
-    print(
-        f"[{role}] Starting client | dataset={dataset} "
-        f"mode={mode} rounds={rounds} device={device}"
-    )
-    log_event(
-        f"[{role}] start_client dataset={dataset} mode={mode} "
-        f"rounds={rounds} device={device}"
-    )
+    print(f"[{role}] Starting client | dataset={dataset} mode={settings.mode} rounds={rounds} device={settings.device}")
 
-    loader = load_client_partition(dataset, role, batch_size=settings.batch_size)
+    # --------------------------------------------------
+    # 1. Load local partition
+    # --------------------------------------------------
+    X, y = load_client_partition(dataset, role)
+    num_nodes = X.shape[-1]
 
-    model = GRUModel(hidden_size=settings.hidden_size)
+    # --------------------------------------------------
+    # 2. Create model
+    # --------------------------------------------------
+    model = GRUModel(num_nodes=num_nodes, hidden_size=settings.hidden_size)
+    model.to(settings.device)
+
+    # --------------------------------------------------
+    # 3. Per-round FL loop
+    # --------------------------------------------------
     total_energy = 0.0
 
     for r in range(1, rounds + 1):
         print(f"[{role}] ===== ROUND {r} =====")
 
-        # Download latest global model from S3
-        global_state = download_global_model(r, role)
+        # ----------------------------------------------
+        # Download global model from S3
+        # ----------------------------------------------
+        global_state = download_global_model(r)
+        if global_state is None:
+            print(f"[{role}] Waiting for global model round {r}...")
+            time.sleep(2)
+            continue
+
         model.load_state_dict(global_state)
 
+        # ----------------------------------------------
         # Local training
-        start_train = time.time()
-        updated_state, loss, samples, approx_flops = train_one_round(
-            model=model,
-            loader=loader,
-            role=role,
-            round_id=r,
-            device=device,
-            local_epochs=settings.local_epochs,
+        # ----------------------------------------------
+        loss, train_time = train_one_epoch(
+            model,
+            X,
+            y,
             lr=settings.lr,
-            mode=mode,
-            global_state=global_state,
-        )
-        train_time = time.time() - start_train
-
-        # Apply differential privacy if enabled
-        if settings.dp_enabled:
-            updated_state = apply_dp_noise(updated_state, sigma=settings.dp_sigma)
-
-        # Apply compression if enabled
-        if settings.compression_enabled:
-            updated_state = compress_update(updated_state, settings)
-
-        # Upload update and measure communication cost
-        size_bytes, upload_latency = upload_update(r, role, updated_state)
-
-        # Energy accounting
-        energy_info = compute_energy(
-            compute_duration_s=train_time,
-            update_size_bytes=size_bytes,
-            device_power_watts=settings.device_power_watts,
-            net_j_per_mb=settings.net_j_per_mb,
-        )
-        total_energy += energy_info["total_energy"]
-
-        # Build and upload metadata for AEFL selection
-        meta = build_round_metadata(
-            role=role,
-            round_id=r,
-            train_loss=loss,
-            train_samples=samples,
-            compute_time_j=energy_info["compute_energy"],
-            compute_flops_j=0.0,     # FLOPs-to-J conversion left as future refinement
-            comm_j=energy_info["comm_energy"],
-            download_bytes=0,        # Download size is not logged here
-            upload_bytes=size_bytes,
-            upload_latency_sec=upload_latency,
-        )
-        upload_metadata(r, role, meta)
-
-        print(
-            f"[{role}] Round {r} | loss={loss:.6f}, "
-            f"time={train_time:.3f}s, "
-            f"energy={energy_info['total_energy']:.3f} J"
+            batch_size=settings.batch_size,
+            local_epochs=settings.local_epochs,
+            device=settings.device,
+            dp_enabled=settings.dp_enabled,
+            dp_sigma=settings.dp_sigma,
+            compression_enabled=settings.compression_enabled,
+            compression_mode=settings.compression_mode,
+            compression_sparsity=settings.compression_sparsity,
+            compression_k_frac=settings.compression_k_frac,
         )
 
-    print(
-        f"[{role}] Finished {rounds} rounds. "
-        f"Total estimated energy={total_energy:.2f} J."
-    )
-    log_event(
-        f"[{role}] finish_client rounds={rounds} total_energy_j={total_energy:.3f}"
-    )
+        print(f"[{role}] Round {r} training | loss={loss:.6f}, time={train_time:.3f}s, samples={len(X)}")
+
+        # ----------------------------------------------
+        # Compute energy
+        # ----------------------------------------------
+        energy_info = estimate_energy(
+            compute_time=train_time,
+            update_size_mb=None,   # filled after upload
+            device_watts=settings.device_power_watts,
+            j_per_mb=settings.net_j_per_mb,
+        )
+
+        # ----------------------------------------------
+        # Upload update to S3
+        # ----------------------------------------------
+        update_state = model.state_dict()
+
+        update_size_mb, latency = upload_update(r, role, update_state)
+
+        energy_info["comm_total"] = update_size_mb * settings.net_j_per_mb
+        energy_info["total"] = energy_info["compute_time"] + energy_info["comm_total"]
+
+        total_energy += energy_info["total"]
+
+        print(f"[{role}] Energy round {r}: compute={energy_info['compute_time']:.2f} J, "
+              f"comm={energy_info['comm_total']:.2f} J, total={energy_info['total']:.2f} J")
+
+        # ----------------------------------------------
+        # Upload metadata
+        # ----------------------------------------------
+        metadata = {
+            "bandwidth_mbps": (update_size_mb * 8) / (latency + 1e-9),
+            "total_energy_j": energy_info["total"],
+        }
+
+        upload_update(r, role, metadata, meta=True)
+
+    print(f"[{role}] Finished {rounds} rounds. Total estimated energy={total_energy:.2f} J.")
 
 
 if __name__ == "__main__":

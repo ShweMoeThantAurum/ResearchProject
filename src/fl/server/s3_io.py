@@ -58,29 +58,28 @@ def clear_all_rounds():
     log_event(f"[SERVER] cleared_s3_objects bucket={bucket} prefix={prefix} count={deleted}")
 
 
-def upload_global_model(state_dict, round_id):
-    """Upload global model state dict to S3 for a given round."""
+def upload_global_model(round_id, state_dict):
+    """
+    Upload global model for a given round using multipart-safe upload_fileobj.
+    Required for AWS Academy Learner Lab (PutObject fails for large bodies).
+    """
     bucket = get_s3_bucket()
     key = _global_key(round_id)
     s3 = _s3_client()
 
     buf = io.BytesIO()
     torch.save(state_dict, buf)
-    body = buf.getvalue()
-    size_mb = len(body) / (1024.0 * 1024.0)
+    buf.seek(0)
 
-    s3.put_object(
+    # Multipart-capable upload
+    s3.upload_fileobj(
+        Fileobj=buf,
         Bucket=bucket,
         Key=key,
-        Body=body,
-        ContentType="application/octet-stream",
+        ExtraArgs={"ContentType": "application/octet-stream"}
     )
 
-    log_event(
-        f"[SERVER] upload_global_model round={round_id} "
-        f"size_mb={size_mb:.3f} key=s3://{bucket}/{key}"
-    )
-    print(f"[SERVER] Uploaded global model r={round_id} ({size_mb:.3f} MB) to s3://{bucket}/{key}")
+    log_event(f"[SERVER] Uploaded global model for round {round_id} to s3://{bucket}/{key}")
 
 
 def download_client_update(round_id, role):

@@ -1,79 +1,76 @@
 """
-Local training loop for FL clients.
-Supports FedAvg, AEFL, FedProx, and LocalOnly modes.
+Client-side local training utilities.
+Runs one local epoch of GRU model training with optional DP and compression.
 """
 
+import time
 import torch
-from torch.utils.data import DataLoader
-from ..utils.logger import log_event
+import torch.nn as nn
+import torch.optim as optim
 
-FEDPROX_MU = 0.01
+from .dp import apply_dp_noise
+from .compression import apply_compression
 
 
-def train_one_round(model,
-                    loader,
-                    role,
-                    round_id,
-                    device,
-                    local_epochs,
-                    lr,
-                    mode,
-                    global_state=None):
-    """Train model locally for one round and return updated state."""
-    model.to(device)
+def train_one_epoch(
+    model,
+    X,
+    y,
+    lr,
+    batch_size,
+    local_epochs,
+    device,
+    dp_enabled=False,
+    dp_sigma=0.01,
+    compression_enabled=False,
+    compression_mode="sparsify",
+    compression_sparsity=0.5,
+    compression_k_frac=0.1,
+):
+    """
+    Runs one round of local GRU training. Applies DP & compression to the final update.
+    Returns: (loss_value, compute_time_seconds)
+    """
+    start = time.time()
+
     model.train()
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=lr)
 
-    opt = torch.optim.Adam(model.parameters(), lr=lr)
-    loss_fn = torch.nn.MSELoss()
+    X_t = torch.tensor(X, dtype=torch.float32).to(device)
+    y_t = torch.tensor(y, dtype=torch.float32).to(device)
 
-    use_prox = mode.lower() == "fedprox" and global_state is not None
+    dataset = torch.utils.data.TensorDataset(X_t, y_t)
+    loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    global_params = None
-    if use_prox:
-        # Copy global parameters as FedProx reference
-        global_params = [global_state[k].to(device) for k in model.state_dict().keys()]
-
-    total_loss = 0.0
-    total_batches = 0
-    total_samples = 0
-    approx_flops = 0.0
+    last_loss = 0.0
 
     for _ in range(local_epochs):
-        for X, Y in loader:
-            X = X.to(device)
-            Y = Y.to(device)
-
-            opt.zero_grad()
-            pred = model(X)
-            loss = loss_fn(pred, Y)
-
-            if use_prox and global_params is not None:
-                prox_term = 0.0
-                for p, g0 in zip(model.parameters(), global_params):
-                    prox_term += torch.sum((p - g0) ** 2)
-                loss = loss + 0.5 * FEDPROX_MU * prox_term
-
+        for xb, yb in loader:
+            optimizer.zero_grad()
+            pred = model(xb)
+            loss = criterion(pred, yb)
             loss.backward()
-            opt.step()
+            optimizer.step()
+            last_loss = loss.item()
 
-            batch_size = X.size(0)
-            total_loss += loss.item()
-            total_batches += 1
-            total_samples += batch_size
+    compute_time = time.time() - start
 
-            # Very rough FLOPs estimate for GRU workload
-            seq_len = X.size(1)
-            num_nodes = X.size(2)
-            hidden = next(model.parameters()).numel() // max(1, num_nodes)
-            approx_flops += float(batch_size * seq_len * num_nodes * hidden)
+    # ----------------------------------------------------
+    # DP: apply Gaussian noise to model parameters
+    # ----------------------------------------------------
+    if dp_enabled:
+        apply_dp_noise(model.state_dict(), sigma=dp_sigma)
 
-    avg_loss = total_loss / max(1, total_batches)
+    # ----------------------------------------------------
+    # Compression: sparsify or top-k
+    # ----------------------------------------------------
+    if compression_enabled:
+        apply_compression(
+            model.state_dict(),
+            mode=compression_mode,
+            sparsity=compression_sparsity,
+            k_frac=compression_k_frac,
+        )
 
-    log_event(
-        f"[{role}] round={round_id} mode={mode} "
-        f"loss={avg_loss:.6f} batches={total_batches} samples={total_samples}"
-    )
-
-    state_cpu = {k: v.detach().cpu() for k, v in model.state_dict().items()}
-
-    return state_cpu, avg_loss, total_samples, approx_flops
+    return last_loss, compute_time

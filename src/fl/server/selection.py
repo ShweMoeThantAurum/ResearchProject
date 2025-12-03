@@ -1,6 +1,6 @@
 """
-Client selection logic for server-side federated learning.
-Implements AEFL selection based on bandwidth and energy metadata.
+Client selection logic for server-side FL.
+Implements AEFL selection based on client metadata.
 """
 
 from .utils_server import ROLES, get_aefl_max_clients
@@ -12,7 +12,7 @@ def select_all_clients():
 
 
 def _normalise(values):
-    """Normalise a dict of numeric values into [0, 1]."""
+    """Normalise numeric dict values into [0, 1]."""
     if not values:
         return {}
     vmax = max(values.values())
@@ -23,11 +23,9 @@ def _normalise(values):
 
 def select_clients_aefl(metadata):
     """
-    Select AEFL clients using bandwidth and energy scores.
+    Select AEFL clients using bandwidth and energy metadata.
 
-    Favors clients with:
-    - higher uplink bandwidth
-    - lower total energy consumption.
+    Higher bandwidth and lower total energy are preferred.
     """
     if not metadata:
         return select_all_clients()
