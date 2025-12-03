@@ -1,32 +1,51 @@
 """
-Energy estimation utilities for client-side training and communication.
-Computes simple Joule estimates from time and payload size.
+Energy estimation utilities for FL clients.
+Models compute cost (GRU forward/backward) and communication cost.
 """
 
-def compute_compute_energy(duration_s, device_power_watts):
-    """Energy from local computation using E = P * t."""
-    return device_power_watts * duration_s
+import torch
+import time
 
 
-def compute_comm_energy(num_bytes, net_j_per_mb):
-    """Energy from communication, proportional to MB transferred."""
-    mb = num_bytes / (1024.0 * 1024.0)
+def estimate_compute_energy(model, batch_count, device_power_watts):
+    """
+    Rough compute energy model:
+    energy = power (W) * time (s)
+    """
+    start = time.time()
+
+    # small dummy forward pass to approximate cost per batch
+    dummy = torch.randn(1, model.seq_len, model.num_nodes, device=model.fc.weight.device)
+    _ = model(dummy)
+
+    elapsed = time.time() - start
+    total_time = elapsed * batch_count
+    return device_power_watts * total_time
+
+
+def estimate_comm_energy(bytes_up, net_j_per_mb):
+    """
+    Simple linear model for wireless transmission cost.
+    """
+    mb = bytes_up / (1024 * 1024)
     return mb * net_j_per_mb
 
 
-def compute_energy(compute_duration_s,
-                   update_size_bytes,
-                   device_power_watts,
-                   net_j_per_mb):
+def estimate_energy(model,
+                    batch_count,
+                    bytes_up,
+                    device_power_watts,
+                    net_j_per_mb):
     """
-    Compute total round energy as compute + communication.
+    Main entry used by client_main.
+    Computes total energy = compute + communication.
     """
-    e_comp = compute_compute_energy(compute_duration_s, device_power_watts)
-    e_comm = compute_comm_energy(update_size_bytes, net_j_per_mb)
-    total = e_comp + e_comm
+    compute_j = estimate_compute_energy(model, batch_count, device_power_watts)
+    comm_j = estimate_comm_energy(bytes_up, net_j_per_mb)
+    total_j = compute_j + comm_j
 
     return {
-        "compute_energy": e_comp,
-        "comm_energy": e_comm,
-        "total_energy": total,
+        "compute_j": compute_j,
+        "comm_j": comm_j,
+        "total_j": total_j,
     }
