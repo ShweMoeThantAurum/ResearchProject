@@ -72,16 +72,20 @@ def load_los():
 
 
 def load_pems08():
-    """Loads PEMS08 dataset from pems08.npz."""
+    """Loads PEMS08 speed data from pems08.npz (shape T, N, F)."""
     folder = os.path.join(RAW_DIR, "pems08")
     path = os.path.join(folder, "pems08.npz")
 
     if not os.path.exists(path):
         raise FileNotFoundError("Missing PEMS08 npz file: " + path)
 
-    data = np.load(path)["data"]  # (N, T)
-    data = data.T                 # convert to (T, N)
-    return data.astype(np.float32)
+    data = np.load(path)["data"]  # shape (T, N, 3)
+
+    # Extract speed channel (feature 0)
+    speed = data[:, :, 0]        # shape (T, N)
+
+    print("PEMS08 raw loaded:", speed.shape)
+    return speed.astype(np.float32)
 
 
 # Main preprocessing procedure
