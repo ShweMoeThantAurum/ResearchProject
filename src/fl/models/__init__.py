@@ -1,5 +1,5 @@
 """
-Model package exposing the GRUModel for use by server and clients.
+Model definitions for federated learning tasks.
 """
 
 from .gru_model import GRUModel

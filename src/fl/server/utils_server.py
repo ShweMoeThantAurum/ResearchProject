@@ -1,56 +1,69 @@
 """
-Client selection logic for server-side federated learning.
-Implements AEFL selection based on bandwidth and energy metadata.
+Shared utilities for server-side federated learning:
+- role definitions
+- environment helpers
+- S3 path helpers
+- simple AEFL settings.
 """
 
-from .utils_server import ROLES, get_aefl_max_clients
+import os
+
+# ---------------------------------------------------------------------
+# Roles used throughout the project
+# ---------------------------------------------------------------------
+ROLES = ["roadside", "vehicle", "sensor", "camera", "bus"]
 
 
-def select_all_clients():
-    """Select all available client roles."""
-    return list(ROLES)
+def _get_env(name, default):
+    """Return environment variable or default value."""
+    v = os.environ.get(name, default)
+    return v
 
 
-def _normalise(values):
-    """Normalise a dict of numeric values into [0, 1]."""
-    if not values:
-        return {}
-    vmax = max(values.values())
-    if vmax <= 0:
-        return {k: 0.0 for k in values}
-    return {k: v / float(vmax) for k, v in values.items()}
+# ---------------------------------------------------------------------
+# S3 configuration
+# ---------------------------------------------------------------------
+def get_s3_bucket():
+    """Return primary S3 bucket name for round data."""
+    return _get_env("S3_BUCKET", "aefl")
 
 
-def select_clients_aefl(metadata):
+def get_s3_prefix():
     """
-    Select AEFL clients using bandwidth and energy scores.
+    Return dataset/mode prefix for round data.
 
-    Favors clients with:
-    - higher uplink bandwidth
-    - lower total energy consumption.
+    Layout:
+      fl/<dataset>/<MODE>/
     """
-    if not metadata:
-        return select_all_clients()
+    dataset = _get_env("DATASET", "sz").lower()
+    mode = _get_env("FL_MODE", "AEFL").upper()
+    return f"fl/{dataset}/{mode}"
 
-    roles = list(metadata.keys())
 
-    bw = {r: metadata[r].get("bandwidth_mbps", 0.0) for r in roles}
-    en = {r: metadata[r].get("total_energy_j", 0.0) for r in roles}
+def get_results_bucket():
+    """
+    Return bucket name for experiment summaries and artifacts.
+    Falls back to S3_BUCKET if RESULTS_BUCKET is not set.
+    """
+    return _get_env("RESULTS_BUCKET", _get_env("S3_BUCKET", "aefl"))
 
-    bw_norm = _normalise(bw)
-    en_norm = _normalise(en)
 
-    scores = {}
-    for r in roles:
-        bw_score = bw_norm.get(r, 0.0)
-        en_score = 1.0 - en_norm.get(r, 0.0)
-        scores[r] = 0.6 * bw_score + 0.4 * en_score
+# ---------------------------------------------------------------------
+# Dataset/mode for summaries
+# ---------------------------------------------------------------------
+def get_dataset():
+    """Return dataset name as lowercase string."""
+    return _get_env("DATASET", "sz").lower()
 
-    sorted_roles = sorted(roles, key=lambda k: scores[k], reverse=True)
-    k = min(get_aefl_max_clients(), len(sorted_roles))
-    selected = sorted_roles[:k]
 
-    print("[SERVER] AEFL scores:", scores)
-    print("[SERVER] AEFL selected clients:", selected)
+def get_fl_mode():
+    """Return FL mode name as lowercase string."""
+    return _get_env("FL_MODE", "AEFL").lower()
 
-    return selected
+
+# ---------------------------------------------------------------------
+# AEFL selection parameters
+# ---------------------------------------------------------------------
+def get_aefl_max_clients():
+    """Return maximum number of clients to select per AEFL round."""
+    return int(_get_env("AEFL_MAX_CLIENTS", "3"))
