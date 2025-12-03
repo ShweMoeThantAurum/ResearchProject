@@ -17,6 +17,7 @@ class Settings:
     def __init__(self):
         self.dataset = _get_env("DATASET", "sz").lower()
         self.fl_mode = _get_env("FL_MODE", "AEFL").lower()
+        self.client_role = _get_env("CLIENT_ROLE", "").lower()
         self.fl_rounds = int(_get_env("FL_ROUNDS", "20"))
         self.batch_size = int(_get_env("BATCH_SIZE", "64"))
         self.local_epochs = int(_get_env("LOCAL_EPOCHS", "1"))
