@@ -26,12 +26,13 @@ from src.fl.server.s3_io import (
     download_client_update,
     load_round_metadata,
     upload_global_model,
+    clear_all_rounds,
 )
-from src.fl.server.utils_server import ROLES, get_dataset, get_fl_mode
+from src.fl.server.utils_server import get_dataset, get_fl_mode
 from src.fl.models.gru_model import GRUModel
 
 
-def _infer_num_nodes(dataset):
+def _infer_num_nodes(dataset: str) -> int:
     """Infer number of nodes from processed train split."""
     path = os.path.join("datasets", "processed", dataset, "global", "train.pt")
     X_train, _ = torch.load(path)
@@ -43,6 +44,9 @@ def main():
     dataset = get_dataset()
     mode = get_fl_mode()
     rounds = settings.fl_rounds
+
+    # Clean previous S3 objects for this experiment to avoid stale globals
+    clear_all_rounds()
 
     num_nodes = _infer_num_nodes(dataset)
 
@@ -60,7 +64,9 @@ def main():
     for r in range(1, rounds + 1):
         print(f"\n========== ROUND {r} ==========")
 
+        # ------------------------------------------------
         # Client selection
+        # ------------------------------------------------
         if mode == "aefl" and r > 1:
             metadata = load_round_metadata(r - 1)
             chosen = select_clients_aefl(metadata)
@@ -69,10 +75,12 @@ def main():
 
         print(f"[SERVER] Selected clients: {chosen}")
 
+        # ------------------------------------------------
         # Collect client updates
+        # ------------------------------------------------
         updates = {}
         start_wait = time.time()
-        timeout = 300
+        timeout = 300  # seconds
 
         while len(updates) < len(chosen):
             for role in chosen:
@@ -94,20 +102,30 @@ def main():
 
             time.sleep(1.0)
 
+        # ------------------------------------------------
         # Aggregation
+        # ------------------------------------------------
         start_aggr = time.time()
 
-        if mode == "aefl":
-            global_state = aggregate_aefl(updates)
-        elif mode == "fedavg":
-            global_state = aggregate_fedavg(updates)
-        elif mode == "fedprox":
-            global_state = aggregate_fedprox(updates)
-        elif mode == "localonly":
-            # still aggregate, but conceptually represents local-only baseline
-            global_state = aggregate_fedavg(updates)
+        if not updates:
+            # No updates received → reuse previous global state
+            print(
+                "[SERVER] WARNING: No client updates received this round; "
+                "reusing previous global model."
+            )
+            # global_state stays as previous
         else:
-            raise ValueError(f"Unknown FL mode: {mode}")
+            if mode == "aefl":
+                global_state = aggregate_aefl(updates)
+            elif mode == "fedavg":
+                global_state = aggregate_fedavg(updates)
+            elif mode == "fedprox":
+                global_state = aggregate_fedprox(updates)
+            elif mode == "localonly":
+                # still aggregate, but conceptually represents local-only baseline
+                global_state = aggregate_fedavg(updates)
+            else:
+                raise ValueError(f"Unknown FL mode: {mode}")
 
         aggr_time = time.time() - start_aggr
         print(f"[SERVER] Aggregation complete | time={aggr_time:.3f}s")
@@ -117,7 +135,9 @@ def main():
         if next_round <= rounds:
             upload_global_model(next_round, global_state)
 
+    # ------------------------------------------------
     # Final evaluation on test set
+    # ------------------------------------------------
     metrics = evaluate_final_model(global_state, dataset)
 
     print("\n[SERVER] Final Evaluation:")

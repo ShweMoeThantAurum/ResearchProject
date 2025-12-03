@@ -17,7 +17,17 @@ def rmse(pred, target):
     return torch.sqrt(F.mse_loss(pred, target)).item()
 
 
-def mape(pred, target):
-    """Mean Absolute Percentage Error."""
-    eps = 1e-7
-    return torch.mean(torch.abs((pred - target) / (target + eps))).item()
+def mape(pred, target, eps=1e-7, threshold=0.05):
+    """Mean Absolute Percentage Error with masking for near-zero targets."""
+    # mask out values close to zero (normalised scale)
+    mask = target > threshold
+
+    if mask.sum() == 0:
+        return float('nan')
+
+    pred_masked = pred[mask]
+    target_masked = target[mask]
+
+    return torch.mean(
+        torch.abs((pred_masked - target_masked) / (target_masked + eps))
+    ).item()

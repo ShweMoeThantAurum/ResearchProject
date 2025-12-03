@@ -56,8 +56,16 @@ def train_one_epoch(
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
-    X_t = torch.tensor(X, dtype=torch.float32).to(device)
-    y_t = torch.tensor(y, dtype=torch.float32).to(device)
+    if isinstance(X, torch.Tensor):
+        X_t = X.detach().to(device)
+    else:
+        X_t = torch.tensor(X, dtype=torch.float32).to(device)
+
+    if isinstance(y, torch.Tensor):
+        y_t = y.detach().to(device)
+    else:
+        y_t = torch.tensor(y, dtype=torch.float32).to(device)
+
 
     dataset = torch.utils.data.TensorDataset(X_t, y_t)
     loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)

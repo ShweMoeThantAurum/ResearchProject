@@ -39,7 +39,7 @@ def evaluate_final_model(state_dict, dataset):
     results = {
         "MAE": mae(preds, trues),
         "RMSE": rmse(preds, trues),
-        "MAPE": mape(preds, trues),
+        "MAPE": mape(preds, trues, threshold=0.05),
     }
 
     return results

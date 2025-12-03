@@ -62,7 +62,20 @@ def main():
         # Download global model from S3
         # ----------------------------------------------
         global_state = download_global_model(r, role)
-        model.load_state_dict(global_state)
+        # Safely load global state; if invalid, keep local weights
+        try:
+            model.load_state_dict(global_state)
+        except Exception as e:
+            print(
+                f"[{role}] WARNING: Invalid global state for round {r} "
+                f"(type={type(global_state)}): {e}"
+            )
+            log_event(
+                f"[{role}] invalid_global_state round={r} "
+                f"type={type(global_state)} error={e}"
+            )
+            # Continue with existing model weights (local state)
+
 
         # ----------------------------------------------
         # Local training + DP + compression
