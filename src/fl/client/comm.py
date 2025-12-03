@@ -1,10 +1,6 @@
 """
-Client-side S3 communication utilities.
-
-Responsible for:
-- downloading the global model for each round
-- uploading processed updates
-- uploading metadata used by AEFL selection.
+Client-side communication using S3.
+Downloads global models and uploads updates and metadata.
 """
 
 import io
@@ -15,8 +11,8 @@ import time
 import boto3
 import torch
 
-from src.fl.utils.logger import log_event
-from src.fl.server.utils_server import get_s3_bucket, get_s3_prefix
+from ..utils.logger import log_event
+from ..server.utils_server import get_s3_bucket, get_s3_prefix
 
 
 def _s3_client():
@@ -26,25 +22,28 @@ def _s3_client():
 
 
 def _global_key(round_id):
-    """Key for the global model at a specific round."""
+    """Build S3 key for a global model."""
     prefix = get_s3_prefix()
     return f"{prefix}/round_{round_id}/global.pt"
 
 
 def _update_key(round_id, role):
-    """Key for a client update at a specific round."""
+    """Build S3 key for a processed client update."""
     prefix = get_s3_prefix()
     return f"{prefix}/round_{round_id}/updates/{role}.pt"
 
 
 def _metadata_key(round_id, role):
-    """Key for client metadata JSON."""
+    """Build S3 key for a client metadata JSON file."""
     prefix = get_s3_prefix()
     return f"{prefix}/round_{round_id}/metadata/{role}.json"
 
 
 def download_global_model(round_id, role):
-    """Blocking download of global model state_dict for this round."""
+    """
+    Download global model state dict for the given round.
+    Retries until the server uploads the model.
+    """
     bucket = get_s3_bucket()
     key = _global_key(round_id)
     s3 = _s3_client()
@@ -59,13 +58,12 @@ def download_global_model(round_id, role):
             buf = io.BytesIO(raw)
             state = torch.load(buf, map_location="cpu")
 
-            size_bytes = len(raw)
-            mb = size_bytes / (1024.0 * 1024.0)
+            size_mb = len(raw) / (1024.0 * 1024.0)
+            print(f"[{role}] Downloaded global model r={round_id} ({size_mb:.3f} MB, {latency:.3f}s)")
 
-            print(f"[{role}] Downloaded global r={round_id} ({mb:.3f} MB, {latency:.3f}s)")
             log_event(
-                f"[{role}] download_global round={round_id} "
-                f"size_mb={mb:.3f} latency_s={latency:.3f}"
+                f"[{role}] download_global r={round_id} "
+                f"size_mb={size_mb:.3f} latency_s={latency:.3f} key={key}"
             )
 
             return state
@@ -75,7 +73,10 @@ def download_global_model(round_id, role):
 
 
 def upload_update(round_id, role, state_dict):
-    """Upload processed client update for this round."""
+    """
+    Upload processed client update to S3.
+    Returns (size_bytes, latency_sec).
+    """
     bucket = get_s3_bucket()
     key = _update_key(round_id, role)
     s3 = _s3_client()
@@ -83,29 +84,30 @@ def upload_update(round_id, role, state_dict):
     buf = io.BytesIO()
     torch.save(state_dict, buf)
     body = buf.getvalue()
+    size_bytes = len(body)
 
     start = time.time()
     s3.put_object(Bucket=bucket, Key=key, Body=body)
     latency = time.time() - start
-    size_bytes = len(body)
-    mb = size_bytes / (1024.0 * 1024.0)
 
-    print(f"[{role}] Uploaded update r={round_id} ({mb:.3f} MB, {latency:.3f}s)")
+    size_mb = size_bytes / (1024.0 * 1024.0)
+    print(f"[{role}] Uploaded update r={round_id} ({size_mb:.3f} MB, {latency:.3f}s)")
+
     log_event(
-        f"[{role}] upload_update round={round_id} size_mb={mb:.3f} latency_s={latency:.3f}"
+        f"[{role}] upload_update r={round_id} "
+        f"size_mb={size_mb:.3f} latency_s={latency:.3f} key={key}"
     )
 
     return size_bytes, latency
 
 
 def upload_metadata(round_id, role, meta):
-    """Upload JSON metadata for this round and role."""
+    """Upload per-round client metadata JSON for AEFL selection."""
     bucket = get_s3_bucket()
     key = _metadata_key(round_id, role)
     s3 = _s3_client()
 
     body = json.dumps(meta).encode("utf-8")
-
     start = time.time()
     s3.put_object(Bucket=bucket, Key=key, Body=body)
     latency = time.time() - start
@@ -113,14 +115,12 @@ def upload_metadata(round_id, role, meta):
     print(
         f"[{role}] Uploaded metadata r={round_id}: "
         f"bandwidth={meta.get('bandwidth_mbps', 0.0):.3f} Mb/s, "
-        f"total_energy={meta.get('total_energy_j', 0.0):.3f} J"
+        f"total_energy={meta.get('total_energy_j', 0.0):.2f} J"
     )
 
     log_event(
-        f"[{role}] upload_metadata round={round_id} "
-        f"latency_s={latency:.3f} size_bytes={len(body)} "
-        f"bandwidth_mbps={meta.get('bandwidth_mbps', 0.0):.3f} "
-        f"total_energy_j={meta.get('total_energy_j', 0.0):.4f}"
+        f"[{role}] upload_metadata r={round_id} "
+        f"bytes={len(body)} latency_s={latency:.3f} key={key}"
     )
 
     return latency

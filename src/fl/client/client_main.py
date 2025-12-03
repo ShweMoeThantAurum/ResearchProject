@@ -2,11 +2,12 @@
 Client entrypoint for federated learning.
 
 Each client:
-- loads its local data split
-- downloads the global model from S3
-- trains locally
+- loads its local dataset partition
+- receives global models from the server
+- trains locally on CPU
 - applies optional DP and compression
-- uploads its update and energy/bandwidth metadata.
+- computes simple energy estimates
+- uploads updates and metadata to S3.
 """
 
 import time
@@ -24,46 +25,48 @@ from src.fl.client.comm import (
     upload_update,
     upload_metadata,
 )
-from src.fl.client.utils_client import compute_bandwidth_mbps
+from src.fl.client.utils_client import (
+    get_role,
+    get_dataset,
+    build_round_metadata,
+)
 from src.fl.utils.logger import log_event
 
 
 def main():
-    """Run the FL client loop for all rounds."""
-    role = settings.client_role or "roadside"
-    dataset = settings.dataset
-    mode = settings.fl_mode
+    """Run one client process for all FL rounds."""
+    role = get_role()
+    dataset = get_dataset()
     rounds = settings.fl_rounds
+    mode = settings.fl_mode
 
-    log_event(f"[{role}] Starting client | dataset={dataset} mode={mode}")
-    print(f"[{role}] Starting client | dataset={dataset} mode={mode} rounds={rounds}")
-
-    # For this thesis implementation we assume CPU.
-    # GPU-aware extensions are left as future work.
+    # CPU-only training for AWS Academy; GPU can be future work.
     device = torch.device("cpu")
 
-    # Build local DataLoader for this client partition
-    loader = load_client_partition(dataset, role, settings.batch_size)
+    print(
+        f"[{role}] Starting client | dataset={dataset} "
+        f"mode={mode} rounds={rounds} device={device}"
+    )
+    log_event(
+        f"[{role}] start_client dataset={dataset} mode={mode} "
+        f"rounds={rounds} device={device}"
+    )
 
+    loader = load_client_partition(dataset, role, batch_size=settings.batch_size)
+
+    model = GRUModel(hidden_size=settings.hidden_size)
     total_energy = 0.0
 
     for r in range(1, rounds + 1):
         print(f"[{role}] ===== ROUND {r} =====")
 
-        # Download global model state for this round
-        state_dict = download_global_model(r, role)
-
-        # Infer number of nodes from decoder layer
-        decoder_weight = state_dict["decoder.weight"]
-        hidden_size = decoder_weight.shape[1]
-        num_nodes = decoder_weight.shape[0]
-
-        model = GRUModel(num_nodes=num_nodes, hidden_size=hidden_size)
-        model.load_state_dict(state_dict)
+        # Download latest global model from S3
+        global_state = download_global_model(r, role)
+        model.load_state_dict(global_state)
 
         # Local training
-        start_time = time.time()
-        updated_state, loss, num_samples, approx_flops = train_one_round(
+        start_train = time.time()
+        updated_state, loss, samples, approx_flops = train_one_round(
             model=model,
             loader=loader,
             role=role,
@@ -72,56 +75,59 @@ def main():
             local_epochs=settings.local_epochs,
             lr=settings.lr,
             mode=mode,
-            global_state=state_dict if mode == "fedprox" else None,
+            global_state=global_state,
         )
-        train_time = time.time() - start_time
+        train_time = time.time() - start_train
 
-        # DP noise (client-side privacy)
+        # Apply differential privacy if enabled
         if settings.dp_enabled:
             updated_state = apply_dp_noise(updated_state, sigma=settings.dp_sigma)
 
-        # Compression (optional communication saving)
+        # Apply compression if enabled
         if settings.compression_enabled:
             updated_state = compress_update(updated_state, settings)
 
-        # Upload update to S3
-        update_bytes, upload_latency = upload_update(r, role, updated_state)
+        # Upload update and measure communication cost
+        size_bytes, upload_latency = upload_update(r, role, updated_state)
 
-        # Energy accounting for this round
-        e_comp, e_comm, e_total = compute_energy(
+        # Energy accounting
+        energy_info = compute_energy(
             compute_duration_s=train_time,
-            update_size_bytes=update_bytes,
+            update_size_bytes=size_bytes,
             device_power_watts=settings.device_power_watts,
             net_j_per_mb=settings.net_j_per_mb,
         )
-        total_energy += e_total
+        total_energy += energy_info["total_energy"]
 
-        # Simple bandwidth estimate based on upload
-        bandwidth_mbps = compute_bandwidth_mbps(update_bytes, upload_latency)
-
-        # Minimal metadata required for AEFL selection
-        meta = {
-            "bandwidth_mbps": bandwidth_mbps,
-            "total_energy_j": e_total,
-            "train_loss": float(loss),
-            "samples": int(num_samples),
-            "approx_flops": float(approx_flops),
-        }
-
+        # Build and upload metadata for AEFL selection
+        meta = build_round_metadata(
+            role=role,
+            round_id=r,
+            train_loss=loss,
+            train_samples=samples,
+            compute_time_j=energy_info["compute_energy"],
+            compute_flops_j=0.0,     # FLOPs-to-J conversion left as future refinement
+            comm_j=energy_info["comm_energy"],
+            download_bytes=0,        # Download size is not logged here
+            upload_bytes=size_bytes,
+            upload_latency_sec=upload_latency,
+        )
         upload_metadata(r, role, meta)
 
         print(
             f"[{role}] Round {r} | loss={loss:.6f}, "
-            f"time={train_time:.3f}s, energy_total={e_total:.3f} J "
-            f"(compute={e_comp:.3f} J, comm={e_comm:.3f} J)"
+            f"time={train_time:.3f}s, "
+            f"energy={energy_info['total_energy']:.3f} J"
         )
 
-        log_event(
-            f"[{role}] round={r} "
-            f"loss={loss:.6f} time={train_time:.3f}s "
-            f"E_comp={e_comp:.4f}J E_comm={e_comm:.4f}J E_total={e_total:.4f}J "
-            f"BW={bandwidth_mbps:.3f}Mb/s samples={num_samples}"
-        )
+    print(
+        f"[{role}] Finished {rounds} rounds. "
+        f"Total estimated energy={total_energy:.2f} J."
+    )
+    log_event(
+        f"[{role}] finish_client rounds={rounds} total_energy_j={total_energy:.3f}"
+    )
 
-    print(f"[{role}] Finished {rounds} rounds. Total estimated energy={total_energy:.2f} J.")
-    log_event(f"[{role}] finished rounds={rounds} total_energy_j={total_energy:.4f}")
+
+if __name__ == "__main__":
+    main()
