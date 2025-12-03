@@ -1,6 +1,6 @@
 """
 Client-side local training utilities.
-Runs one local epoch of GRU model training with optional DP and compression.
+Runs local GRU training with optional DP and compression.
 """
 
 import time
@@ -28,8 +28,27 @@ def train_one_epoch(
     compression_k_frac=0.1,
 ):
     """
-    Runs one round of local GRU training. Applies DP & compression to the final update.
-    Returns: (loss_value, compute_time_seconds)
+    Runs local GRU training and returns a DP/compressed update dict.
+
+    Args:
+        model: GRUModel (already moved to device)
+        X, y: tensors or numpy arrays (time-series sequences)
+        lr: learning rate
+        batch_size: mini-batch size
+        local_epochs: number of local epochs
+        device: torch.device("cpu" | "cuda")
+        dp_enabled: whether to add Gaussian noise to update
+        dp_sigma: DP sigma value
+        compression_enabled: whether to compress the update
+        compression_mode: "sparsify" or "topk"
+        compression_sparsity: fraction of weights to zero out (for sparsify)
+        compression_k_frac: fraction of weights to keep (for topk)
+
+    Returns:
+        update_state: dict[name -> tensor] (CPU), after DP & compression
+        last_loss: float
+        compute_time_s: float
+        batch_count: int
     """
     start = time.time()
 
@@ -44,6 +63,7 @@ def train_one_epoch(
     loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     last_loss = 0.0
+    batch_count = 0
 
     for _ in range(local_epochs):
         for xb, yb in loader:
@@ -53,24 +73,30 @@ def train_one_epoch(
             loss.backward()
             optimizer.step()
             last_loss = loss.item()
+            batch_count += 1
 
-    compute_time = time.time() - start
-
-    # ----------------------------------------------------
-    # DP: apply Gaussian noise to model parameters
-    # ----------------------------------------------------
-    if dp_enabled:
-        apply_dp_noise(model.state_dict(), sigma=dp_sigma)
+    compute_time_s = time.time() - start
 
     # ----------------------------------------------------
-    # Compression: sparsify or top-k
+    # Build update dict on CPU
+    # ----------------------------------------------------
+    update_state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+
+    # ----------------------------------------------------
+    # DP: apply Gaussian noise to the update (not model in-place)
+    # ----------------------------------------------------
+    if dp_enabled and dp_sigma > 0.0:
+        update_state = apply_dp_noise(update_state, sigma=dp_sigma)
+
+    # ----------------------------------------------------
+    # Compression: sparsify or top-k the update
     # ----------------------------------------------------
     if compression_enabled:
-        apply_compression(
-            model.state_dict(),
+        update_state = apply_compression(
+            update_state,
             mode=compression_mode,
             sparsity=compression_sparsity,
             k_frac=compression_k_frac,
         )
 
-    return last_loss, compute_time
+    return update_state, last_loss, compute_time_s, batch_count

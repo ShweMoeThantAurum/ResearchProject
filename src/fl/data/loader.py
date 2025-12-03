@@ -46,11 +46,14 @@ def load_test_loader_for_server(dataset, batch_size=64):
     return make_loader(X_test, y_test, batch_size=batch_size, shuffle=False)
 
 
-def load_client_partition(dataset, role, batch_size=64):
+def load_client_partition(dataset, role):
     """
-    Load one client partition as a DataLoader.
-    Uses datasets/processed/<dataset>/<role>.pt
+    Load one client partition as raw tensors (X, y).
+
+    Files:
+        datasets/processed/<dataset>/<role>.pt
     """
     base = os.path.join("datasets", "processed", dataset)
     X, y = load_client_data(base, role)
-    return make_loader(X, y, batch_size=batch_size, shuffle=True)
+    return X, y
+
