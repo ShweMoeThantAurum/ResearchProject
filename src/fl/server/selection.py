@@ -1,56 +1,40 @@
 """
-Client selection logic for server-side federated learning.
-Implements AEFL selection based on bandwidth and energy metadata.
+Client selection logic.
+AEFL selects clients using bandwidth + energy metadata.
+Other modes simply select all clients.
 """
 
-from .utils_server import ROLES, get_aefl_max_clients
+from src.fl.server.utils_server import ROLES
 
 
-def select_all_clients():
-    """Select all available client roles."""
-    return list(ROLES)
+def select_clients(metadata, mode):
+    """Return list of roles to include this round."""
+    if mode != "aefl":
+        return list(ROLES)
 
-
-def _normalise(values):
-    """Normalise a dict of numeric values into [0, 1]."""
-    if not values:
-        return {}
-    vmax = max(values.values())
-    if vmax <= 0:
-        return {k: 0.0 for k in values}
-    return {k: v / float(vmax) for k, v in values.items()}
-
-
-def select_clients_aefl(metadata):
-    """
-    Select AEFL clients using bandwidth and energy scores.
-
-    Favors clients with:
-    - higher uplink bandwidth
-    - lower total energy consumption.
-    """
     if not metadata:
-        return select_all_clients()
+        return list(ROLES)
 
-    roles = list(metadata.keys())
+    bw = {}
+    en = {}
 
-    bw = {r: metadata[r].get("bandwidth_mbps", 0.0) for r in roles}
-    en = {r: metadata[r].get("total_energy_j", 0.0) for r in roles}
+    for role in ROLES:
+        if role in metadata:
+            bw[role] = metadata[role].get("bandwidth_mbps", 0.0)
+            en[role] = metadata[role].get("total_energy_j", 0.0)
+        else:
+            bw[role] = 0.0
+            en[role] = 1e9
 
-    bw_norm = _normalise(bw)
-    en_norm = _normalise(en)
+    # Normalise
+    bw_max = max(bw.values())
+    en_max = max(en.values())
 
     scores = {}
-    for r in roles:
-        bw_score = bw_norm.get(r, 0.0)
-        en_score = 1.0 - en_norm.get(r, 0.0)
+    for r in ROLES:
+        bw_score = bw[r] / (bw_max + 1e-9)
+        en_score = 1.0 - (en[r] / (en_max + 1e-9))
         scores[r] = 0.6 * bw_score + 0.4 * en_score
 
-    sorted_roles = sorted(roles, key=lambda k: scores[k], reverse=True)
-    k = min(get_aefl_max_clients(), len(sorted_roles))
-    selected = sorted_roles[:k]
-
-    print("[SERVER] AEFL scores:", scores)
-    print("[SERVER] AEFL selected clients:", selected)
-
-    return selected
+    sorted_roles = sorted(ROLES, key=lambda x: scores[x], reverse=True)
+    return sorted_roles[:3]
