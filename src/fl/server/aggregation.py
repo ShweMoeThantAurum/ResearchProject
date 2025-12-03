@@ -1,38 +1,38 @@
 """
-Model aggregation utilities.
-Implements FedAvg, FedProx, and AEFL.
+Aggregation strategies for server-side federated learning.
+Implements FedAvg-style parameter averaging.
 """
 
 import torch
 
 
-def _mean(states):
-    """Average model parameters across roles."""
+def _aggregate_mean(states):
+    """Average all client model parameters equally."""
     if not states:
         return {}
 
     roles = list(states.keys())
     base = states[roles[0]]
 
-    avg = {}
-    for name in base:
+    averaged = {}
+    for name in base.keys():
         tensors = [states[r][name].float() for r in roles]
-        stacked = torch.stack(tensors)
-        avg[name] = torch.mean(stacked, dim=0)
+        stacked = torch.stack(tensors, dim=0)
+        averaged[name] = torch.mean(stacked, dim=0)
 
-    return avg
+    return averaged
 
 
 def aggregate_fedavg(states):
-    """FedAvg aggregation."""
-    return _mean(states)
+    """Standard FedAvg parameter aggregation."""
+    return _aggregate_mean(states)
 
 
 def aggregate_fedprox(states):
-    """FedProx uses same server aggregation as FedAvg."""
-    return _mean(states)
+    """FedProx uses same server-side aggregation as FedAvg."""
+    return _aggregate_mean(states)
 
 
 def aggregate_aefl(states):
-    """AEFL uses weighted or equal averaging (equal for now)."""
-    return _mean(states)
+    """AEFL currently uses equal-weight averaging on selected clients."""
+    return _aggregate_mean(states)
