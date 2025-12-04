@@ -1,8 +1,5 @@
 version: "3.9"
 
-# AEFL Federated Learning: 5 Clients + External Server
-# Server runs manually on host: python -m src.fl.server
-
 services:
   client_roadside:
     build:
@@ -13,27 +10,8 @@ services:
     environment:
       CLIENT_ROLE: "roadside"
       DATASET: "${DATASET}"
-      FL_MODE: "${FL_MODE}"
-      FL_ROUNDS: "${FL_ROUNDS}"
-      BATCH_SIZE: "${BATCH_SIZE}"
-      LOCAL_EPOCHS: "${LOCAL_EPOCHS}"
-      LR: "${LR}"
-      HIDDEN_SIZE: "${HIDDEN_SIZE}"
-
-      DEVICE_POWER_WATTS: "${DEVICE_POWER_WATTS}"
-      NET_J_PER_MB: "${NET_J_PER_MB}"
-
-      DP_ENABLED: "${DP_ENABLED}"
-      DP_SIGMA: "${DP_SIGMA}"
-
-      COMPRESSION_ENABLED: "${COMPRESSION_ENABLED}"
-      COMPRESSION_MODE: "${COMPRESSION_MODE}"
-      COMPRESSION_SPARSITY: "${COMPRESSION_SPARSITY}"
-      COMPRESSION_K_FRAC: "${COMPRESSION_K_FRAC}"
-
       AWS_REGION: "${AWS_REGION}"
       S3_BUCKET: "${S3_BUCKET}"
-
     volumes:
       - ..:/app
       - ~/.aws:/root/.aws:ro
