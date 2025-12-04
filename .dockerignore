@@ -1,18 +1,14 @@
-# Prevent huge build context
-data/
+__pycache__
+*.pyc
+.git
+.gitignore
 outputs/
-run_logs/
-__pycache__/
-*.pt
+logs/
+.dockerignore
 *.log
-*.zip
-*.npz
-*.npy
-
-# Git & environments
-.git/
+venv/
 .venv/
-*.pem
-aws/
-*.cert
-*.key
+*.csv
+*.json
+data/raw/
+data/processed/

@@ -6,11 +6,10 @@ Used for Experiment 3: Privacy-Accuracy-Energy Trade-Offs.
 
 import os
 import matplotlib.pyplot as plt
-from .plot_utils import base_plot, ensure_plot_dir
+from .plot_utils import base_plot, ensure_plot_dir, upload_plot
 
 
 def plot_privacy_tradeoff(dataset, sigmas, accuracy_losses):
-    """Plot accuracy loss as a function of DP sigma."""
     out_dir = ensure_plot_dir(dataset, "privacy")
 
     base_plot(
@@ -20,7 +19,12 @@ def plot_privacy_tradeoff(dataset, sigmas, accuracy_losses):
     )
 
     plt.plot(sigmas, accuracy_losses, marker="o")
-    plt.savefig(os.path.join(out_dir, f"{dataset}_privacy_tradeoff.png"))
+
+    filename = f"{dataset}_privacy_tradeoff.png"
+    local_path = os.path.join(out_dir, filename)
+    plt.savefig(local_path)
     plt.close()
 
-    print(f"[analysis] Saved privacy plot to {out_dir}")
+    upload_plot(local_path, f"experiments/{dataset}/plots/privacy")
+
+    print(f"[analysis] Saved + uploaded DP privacy plot for {dataset}")

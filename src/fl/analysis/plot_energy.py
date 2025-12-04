@@ -1,39 +1,35 @@
 """
-Plot total client energy consumption across modes.
-Used for Experiment 2: Energy Comparison.
+Energy comparison plot for federated clients.
 """
 
 import os
+import json
 import matplotlib.pyplot as plt
-
-from .load_results import load_energy_totals
-from .plot_utils import base_plot, ensure_plot_dir
+from .plot_utils import base_plot, ensure_plot_dir, upload_plot
 
 
 def plot_energy(dataset, mode):
-    """
-    Plot per-client total energy for a given dataset/mode.
-
-    Reads:
-        outputs/summaries/<dataset>/<mode>/energy/<role>.json
-    """
     out_dir = ensure_plot_dir(dataset, "energy")
 
-    energies = load_energy_totals(dataset, mode)
-    if not energies:
-        raise ValueError(f"No energy summaries found for {dataset} / {mode}")
+    energy_path = f"outputs/summaries/{dataset}/{mode}/energy_{mode}.json"
+    if not os.path.exists(energy_path):
+        print(f"[analysis] No energy file found → skipping {dataset}/{mode}")
+        return
 
-    roles = list(sorted(energies.keys()))
-    values = [energies[r] for r in roles]
+    with open(energy_path, "r") as f:
+        energies = json.load(f)
 
-    base_plot(
-        f"{dataset.upper()} - {mode.upper()} Total Client Energy",
-        "Client Role",
-        "Energy (J)",
-    )
+    roles = list(energies.keys())
+    values = list(energies.values())
+
+    base_plot(f"{dataset.upper()} - {mode.upper()} Energy", "Client Role", "Energy (J)")
     plt.bar(roles, values)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, f"{dataset}_{mode}_energy.png"))
+
+    filename = f"{dataset}_{mode}_energy.png"
+    local_path = os.path.join(out_dir, filename)
+    plt.savefig(local_path)
     plt.close()
 
-    print(f"[analysis] Saved energy plot to {out_dir}")
+    upload_plot(local_path, f"experiments/{dataset}/plots/energy")
+
+    print(f"[analysis] Saved + uploaded energy plot for {dataset}/{mode}")

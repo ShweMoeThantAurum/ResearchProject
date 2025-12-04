@@ -1,150 +1,89 @@
 """
-YAML configuration loader.
+YAML configuration loader for FL experiments.
 
-Goal:
-- Make experiments reproducible and easy to describe.
-- Allow mode-specific configs (AEFL, FedAvg, FedProx, LocalOnly).
-- Allow optional overlays (e.g. dp_on.yaml, compression_on.yaml).
+Supports:
+- Mode-specific default configs (aefl_default, fedavg, fedprox, localonly)
+- Optional extra overlay configs (e.g., dp_on.yaml, compression_on.yaml)
+- Applying nested YAML structure onto the central `settings` object.
 
-Precedence:
-  1. Python defaults in Settings (settings.py)
-  2. YAML configs (baseline + overlays)
-  3. Environment variables (if you set them explicitly)
+Typical usage (server / client):
+    from src.fl.config.config_loader import load_experiment_config
+    from src.fl.config.settings import settings
 
-At runtime:
-- Map YAML keys into both `settings` attributes AND environment variables,
-  so legacy code that reads os.environ continues to work.
+    load_experiment_config(settings)
+
+Environment variables:
+    DATASET          - sz | los | pems08 (handled by Settings)
+    FL_MODE          - aefl | fedavg | fedprox | localonly (handled by Settings)
+    EXPERIMENT_CONFIG - optional explicit config path or name, e.g. "configs/aefl_default.yaml"
+    EXTRA_CONFIG     - optional comma-separated overlays, e.g. "dp_on.yaml,compression_on.yaml"
 """
 
 import os
 import yaml
+
 from .settings import settings
 
-CONFIG_DIR = "configs"
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-def _set_attr_and_env(attr_name, env_name, value, cast=None):
+def _project_root() -> str:
     """
-    Helper to keep settings.<attr> and os.environ[ENV] consistent.
-    Optionally casts value.
+    Return project root directory assuming this file lives in src/fl/config/.
     """
-    if cast is not None:
-        value = cast(value)
-    setattr(settings, attr_name, value)
-    if env_name is not None:
-        os.environ[env_name] = str(value)
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.abspath(os.path.join(here, "..", "..", ".."))
 
 
-def _apply_root_level(cfg: dict):
-    """Apply root-level keys like 'mode' and 'dataset'."""
-    if "mode" in cfg:
-        mode = str(cfg["mode"]).lower()
-        _set_attr_and_env("fl_mode", "FL_MODE", mode)
-
-    if "dataset" in cfg:
-        ds = str(cfg["dataset"]).lower()
-        _set_attr_and_env("dataset", "DATASET", ds)
+def _configs_dir() -> str:
+    """Return absolute path to configs/ directory."""
+    root = _project_root()
+    return os.path.join(root, "configs")
 
 
-def _apply_training(cfg: dict):
-    """Map training.* into settings + env."""
-    tr = cfg.get("training", {})
-    if not tr:
-        return
-
-    if "batch_size" in tr:
-        _set_attr_and_env("batch_size", "BATCH_SIZE", tr["batch_size"], int)
-    if "local_epochs" in tr:
-        _set_attr_and_env("local_epochs", "LOCAL_EPOCHS", tr["local_epochs"], int)
-    if "learning_rate" in tr:
-        _set_attr_and_env("lr", "LR", tr["learning_rate"], float)
-    if "hidden_size" in tr:
-        _set_attr_and_env("hidden_size", "HIDDEN_SIZE", tr["hidden_size"], int)
-
-
-def _apply_fl(cfg: dict):
-    """Map fl.* into settings + env (rounds, max_clients_per_round)."""
-    fl = cfg.get("fl", {})
-    if not fl:
-        return
-
-    if "rounds" in fl:
-        _set_attr_and_env("fl_rounds", "FL_ROUNDS", fl["rounds"], int)
-
-    # Specific to AEFL
-    if "max_clients_per_round" in fl:
-        # Used by utils_server.get_aefl_max_clients via AEFL_MAX_CLIENTS
-        os.environ["AEFL_MAX_CLIENTS"] = str(int(fl["max_clients_per_round"]))
-
-
-def _apply_energy(cfg: dict):
-    """Map energy.* into settings + env."""
-    en = cfg.get("energy", {})
-    if not en:
-        return
-
-    if "device_power_watts" in en:
-        _set_attr_and_env(
-            "device_power_watts", "DEVICE_POWER_WATTS", en["device_power_watts"], float
-        )
-    if "net_j_per_mb" in en:
-        _set_attr_and_env("net_j_per_mb", "NET_J_PER_MB", en["net_j_per_mb"], float)
-
-
-def _apply_privacy(cfg: dict):
-    """Map privacy.* into settings + env."""
-    pr = cfg.get("privacy", {})
-    if not pr:
-        return
-
-    if "dp_enabled" in pr:
-        enabled = bool(pr["dp_enabled"])
-        _set_attr_and_env("dp_enabled", "DP_ENABLED", str(enabled).lower())
-        # settings.dp_enabled is a bool, env is "true"/"false"
-        settings.dp_enabled = enabled
-
-    if "dp_sigma" in pr:
-        _set_attr_and_env("dp_sigma", "DP_SIGMA", pr["dp_sigma"], float)
-
-
-def _apply_compression(cfg: dict):
-    """Map compression.* into settings + env."""
-    comp = cfg.get("compression", {})
-    if not comp:
-        return
-
-    if "enabled" in comp:
-        enabled = bool(comp["enabled"])
-        _set_attr_and_env(
-            "compression_enabled", "COMPRESSION_ENABLED", str(enabled).lower()
-        )
-        settings.compression_enabled = enabled
-
-    if "mode" in comp:
-        _set_attr_and_env(
-            "compression_mode", "COMPRESSION_MODE", comp["mode"], str
-        )
-    if "sparsity" in comp:
-        _set_attr_and_env(
-            "compression_sparsity",
-            "COMPRESSION_SPARSITY",
-            comp["sparsity"],
-            float,
-        )
-    if "k_frac" in comp:
-        _set_attr_and_env(
-            "compression_k_frac", "COMPRESSION_K_FRAC", comp["k_frac"], float
-        )
-
-
-def apply_yaml_config(path: str):
+def _resolve_config_path(name_or_path: str) -> str:
     """
-    Load and apply configuration overrides from YAML.
+    Resolve a config file path.
 
-    Supported structure (any subset is fine):
+    - If `name_or_path` is absolute or contains a '/', treat as path.
+    - Otherwise, assume it lives under configs/ directory.
+    """
+    if os.path.isabs(name_or_path) or "/" in name_or_path:
+        path = name_or_path
+    else:
+        path = os.path.join(_configs_dir(), name_or_path)
+
+    if not path.lower().endswith(".yaml"):
+        path = path + ".yaml"
+
+    return path
+
+
+def _load_yaml(path: str) -> dict:
+    """Load YAML file into a dict."""
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"[config_loader] Config file not found: {path}")
+
+    with open(path, "r") as f:
+        data = yaml.safe_load(f) or {}
+
+    print(f"[config_loader] Loaded YAML config: {path}")
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Mapping YAML → Settings
+# ---------------------------------------------------------------------------
+
+def _apply_config_dict(cfg: dict, s=settings) -> None:
+    """
+    Apply a parsed YAML config dict onto the Settings object `s`.
+
+    Expected YAML structure (examples):
 
         mode: "AEFL"
-        dataset: "sz"
 
         training:
           batch_size: 64
@@ -154,7 +93,6 @@ def apply_yaml_config(path: str):
 
         fl:
           rounds: 20
-          max_clients_per_round: 3
 
         energy:
           device_power_watts: 3.5
@@ -170,110 +108,143 @@ def apply_yaml_config(path: str):
           sparsity: 0.5
           k_frac: 0.1
     """
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Config file not found: {path}")
+    # Top-level mode override (maps to settings.fl_mode)
+    mode = cfg.get("mode")
+    if mode is not None:
+        s.fl_mode = str(mode).lower()
 
-    with open(path, "r") as f:
-        cfg = yaml.safe_load(f) or {}
+    # training.*
+    training = cfg.get("training", {})
+    if "batch_size" in training:
+        s.batch_size = int(training["batch_size"])
+    if "local_epochs" in training:
+        s.local_epochs = int(training["local_epochs"])
+    if "learning_rate" in training:
+        s.lr = float(training["learning_rate"])
+    if "hidden_size" in training:
+        s.hidden_size = int(training["hidden_size"])
 
-    if not isinstance(cfg, dict):
-        raise ValueError(f"Config file {path} must contain a YAML mapping object.")
+    # fl.*
+    fl_cfg = cfg.get("fl", {})
+    if "rounds" in fl_cfg:
+        s.fl_rounds = int(fl_cfg["rounds"])
+    # NOTE: max_clients_per_round is handled on the server side via AEFL_MAX_CLIENTS,
+    # so we intentionally do not wire it into Settings here.
 
-    _apply_root_level(cfg)
-    _apply_training(cfg)
-    _apply_fl(cfg)
-    _apply_energy(cfg)
-    _apply_privacy(cfg)
-    _apply_compression(cfg)
+    # energy.*
+    energy = cfg.get("energy", {})
+    if "device_power_watts" in energy:
+        s.device_power_watts = float(energy["device_power_watts"])
+    if "net_j_per_mb" in energy:
+        s.net_j_per_mb = float(energy["net_j_per_mb"])
 
-    print(f"[config_loader] Loaded config overrides from {path}")
+    # privacy.*
+    privacy = cfg.get("privacy", {})
+    if "dp_enabled" in privacy:
+        s.dp_enabled = bool(privacy["dp_enabled"])
+    if "dp_sigma" in privacy:
+        s.dp_sigma = float(privacy["dp_sigma"])
+
+    # compression.*
+    comp = cfg.get("compression", {})
+    if "enabled" in comp:
+        s.compression_enabled = bool(comp["enabled"])
+    if "mode" in comp:
+        s.compression_mode = str(comp["mode"])
+    if "sparsity" in comp:
+        s.compression_sparsity = float(comp["sparsity"])
+    if "k_frac" in comp:
+        s.compression_k_frac = float(comp["k_frac"])
 
 
-def _resolve_config_paths_from_env():
+def apply_yaml_config(path: str, s=settings) -> None:
     """
-    Resolve list of YAML config paths from FL_CONFIG env var.
-
-    Examples:
-        FL_CONFIG=aefl_default
-        FL_CONFIG=aefl_default,dp_on,compression_on
-        FL_CONFIG=configs/aefl_default.yaml
-
-    Returns a list of paths (may be empty).
+    Backwards-compatible helper: load YAML and apply it to `s`.
     """
-    cfg_str = os.environ.get("FL_CONFIG", "").strip()
-    if not cfg_str:
-        return []
+    cfg = _load_yaml(path)
+    _apply_config_dict(cfg, s)
 
-    names = [c.strip() for c in cfg_str.split(",") if c.strip()]
+
+# ---------------------------------------------------------------------------
+# Main entry: load_experiment_config
+# ---------------------------------------------------------------------------
+
+def _default_mode_config_name(mode: str) -> str:
+    """
+    Return the default config filename (without path) for a given FL mode.
+    """
+    mode = mode.lower()
+    if mode == "aefl":
+        return "aefl_default.yaml"
+    if mode == "fedavg":
+        return "fedavg.yaml"
+    if mode == "fedprox":
+        return "fedprox.yaml"
+    if mode == "localonly":
+        return "localonly.yaml"
+    # Fallback: no default
+    return ""
+
+
+def load_experiment_config(s=settings) -> None:
+    """
+    Load experiment configuration based on:
+      - settings.fl_mode (for default per-mode YAML)
+      - EXPERIMENT_CONFIG (explicit config, overrides default selection)
+      - EXTRA_CONFIG (comma-separated overlay configs)
+
+    Order of application:
+        1. Base config:
+           - If EXPERIMENT_CONFIG set → use that
+           - Else use per-mode default (aefl_default / fedavg / fedprox / localonly)
+        2. Overlay configs from EXTRA_CONFIG (if any), in listed order.
+
+    Each later config overrides earlier ones.
+    """
+    mode = s.fl_mode.lower()
+    config_dir = _configs_dir()
+
     paths = []
 
-    for name in names:
-        # Allow full path
-        if name.endswith(".yaml") and os.path.exists(name):
-            paths.append(name)
-            continue
+    # 1) Explicit experiment config (takes precedence as base)
+    explicit = os.environ.get("EXPERIMENT_CONFIG") or os.environ.get("CONFIG_FILE")
+    if explicit:
+        base_path = _resolve_config_path(explicit)
+        paths.append(base_path)
+    else:
+        # 2) Mode-specific default
+        default_name = _default_mode_config_name(mode)
+        if default_name:
+            base_path = os.path.join(config_dir, default_name)
+            paths.append(base_path)
 
-        # Otherwise assume it's under CONFIG_DIR
-        fname = name if name.endswith(".yaml") else name + ".yaml"
-        candidate = os.path.join(CONFIG_DIR, fname)
-        paths.append(candidate)
+    # 3) Optional overlays (e.g., dp_on.yaml, compression_on.yaml)
+    extra = os.environ.get("EXTRA_CONFIG", "").strip()
+    if extra:
+        for token in extra.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            overlay_path = _resolve_config_path(token)
+            paths.append(overlay_path)
 
-    return paths
-
-
-def _resolve_default_mode_config():
-    """
-    If FL_CONFIG is not set, infer a baseline config based on current mode.
-
-    AEFL   -> configs/aefl_default.yaml
-    FedAvg -> configs/fedavg.yaml
-    FedProx-> configs/fedprox.yaml
-    LocalOnly -> configs/localonly.yaml
-
-    Returns a list with 0 or 1 paths.
-    """
-    mode = settings.fl_mode.lower()
-    mapping = {
-        "aefl": "aefl_default.yaml",
-        "fedavg": "fedavg.yaml",
-        "fedprox": "fedprox.yaml",
-        "localonly": "localonly.yaml",
-    }
-    fname = mapping.get(mode)
-    if not fname:
-        return []
-
-    return [os.path.join(CONFIG_DIR, fname)]
-
-
-def load_experiment_config():
-    """
-    Main entry used by server/client.
-
-    Strategy:
-      - If FL_CONFIG is set  -> use those YAML(s) in order.
-      - Else                 -> load mode-specific baseline YAML if it exists.
-      - If a file is missing -> print a warning, but do not crash.
-
-    This should be called once at the start of:
-      - src.fl.server.server_main.main()
-      - src.fl.client.client_main.main()
-    """
-    # 1) Explicit FL_CONFIG overrides everything
-    paths = _resolve_config_paths_from_env()
-
-    # 2) If nothing specified, try mode-based default
+    # If nothing to load, just return gracefully
     if not paths:
-        paths = _resolve_default_mode_config()
-
-    if not paths:
-        print("[config_loader] No YAML configs applied (using defaults/env only).")
+        print("[config_loader] No YAML configs selected (using pure env/default Settings).")
         return
 
-    for path in paths:
+    # Apply all configs in order
+    for p in paths:
         try:
-            apply_yaml_config(path)
+            apply_yaml_config(p, s)
         except FileNotFoundError as e:
             print(f"[config_loader] WARNING: {e}")
-        except Exception as e:
-            print(f"[config_loader] WARNING: Failed to apply {path}: {e}")
+
+    # Final debug print
+    print(
+        "[config_loader] Final settings after YAML load: "
+        f"mode={s.fl_mode}, dataset={s.dataset}, "
+        f"rounds={s.fl_rounds}, batch_size={s.batch_size}, "
+        f"dp_enabled={s.dp_enabled}, compression_enabled={s.compression_enabled}"
+    )
+

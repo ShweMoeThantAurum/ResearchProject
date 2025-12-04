@@ -6,19 +6,15 @@ Used for Experiment 1: Accuracy Comparison.
 import os
 import matplotlib.pyplot as plt
 from .load_results import load_metrics
-from .plot_utils import base_plot, ensure_plot_dir
-
+from .plot_utils import base_plot, ensure_plot_dir, upload_plot
 
 MODES = ["localonly", "fedavg", "fedprox", "aefl"]
 
 
 def plot_accuracy_metrics(dataset):
-    """Plot MAE, RMSE, MAPE across FL modes."""
     out_dir = ensure_plot_dir(dataset, "accuracy")
 
-    maes = []
-    rmses = []
-    mapes = []
+    maes, rmses, mapes = [], [], []
 
     for mode in MODES:
         m = load_metrics(dataset, mode)
@@ -26,22 +22,25 @@ def plot_accuracy_metrics(dataset):
         rmses.append(m["RMSE"])
         mapes.append(m["MAPE"])
 
+    def save_and_upload(name):
+        local_path = os.path.join(out_dir, name)
+        plt.savefig(local_path)
+        plt.close()
+        upload_plot(local_path, f"experiments/{dataset}/plots/accuracy")
+
     # MAE
     base_plot(f"{dataset.upper()} - MAE Comparison", "Mode", "MAE")
     plt.bar(MODES, maes)
-    plt.savefig(os.path.join(out_dir, f"{dataset}_mae.png"))
-    plt.close()
+    save_and_upload(f"{dataset}_mae.png")
 
     # RMSE
     base_plot(f"{dataset.upper()} - RMSE Comparison", "Mode", "RMSE")
     plt.bar(MODES, rmses)
-    plt.savefig(os.path.join(out_dir, f"{dataset}_rmse.png"))
-    plt.close()
+    save_and_upload(f"{dataset}_rmse.png")
 
     # MAPE
     base_plot(f"{dataset.upper()} - MAPE Comparison", "Mode", "MAPE")
     plt.bar(MODES, mapes)
-    plt.savefig(os.path.join(out_dir, f"{dataset}_mape.png"))
-    plt.close()
+    save_and_upload(f"{dataset}_mape.png")
 
-    print(f"[analysis] Saved accuracy plots to {out_dir}")
+    print(f"[analysis] Saved + uploaded accuracy plots for {dataset}")
