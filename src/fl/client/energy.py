@@ -1,16 +1,26 @@
 """
-Energy estimation utilities for FL clients.
+Energy estimation utilities for client rounds.
 
-Adds:
-- FLOPs-based compute estimation
-- Separate upload/download communication energy
+Each round produces a JSON entry (energy_<role>.jsonl) containing:
+ - compute energy (device power × training time)
+ - communication energy (bytes × J/MB)
+ - FLOP-based estimate (optional, logged only)
 """
 
-from src.fl.logger import log_event
+import os
+import json
+from pathlib import Path
 from src.utils.flops import estimate_gru_flops
 
+ENERGY_PER_FLOP_J = 1e-9  # academic assumption
 
-ENERGY_PER_FLOP_J = 1e-9  # 1 nJ per FLOP (reasonable academic assumption)
+
+def _log_energy(role, record):
+    """Append a JSON record for this round to run_logs/."""
+    path = Path("run_logs")
+    path.mkdir(exist_ok=True)
+    with open(path / f"energy_{role}.jsonl", "a") as f:
+        f.write(json.dumps(record) + "\n")
 
 
 def estimate_round_energy(
@@ -23,60 +33,47 @@ def estimate_round_energy(
     net_j_per_mb,
     num_nodes=None,
     hidden_size=None,
-    seq_len=12
+    seq_len=12,
 ):
-    """Estimate compute + communication energy for one round."""
+    """
+    Estimate compute + communication energy for a client round.
+    """
+    dataset = os.environ.get("DATASET", "unknown")
+    mode = os.environ.get("FL_MODE", "aefl").lower()
+    variant = os.environ.get("VARIANT_ID", "")
 
-    # ===== Compute energy (time-based) =====
-    compute_j_time = device_power_watts * train_time_sec
+    compute_j = device_power_watts * train_time_sec
 
-    # ===== Compute energy (FLOPs-based) =====
-    if num_nodes is not None and hidden_size is not None:
+    # Optional FLOPs energy
+    if num_nodes and hidden_size:
         flops = estimate_gru_flops(num_nodes, hidden_size, seq_len)
-        compute_j_flops = flops * ENERGY_PER_FLOP_J
+        compute_flops_j = flops * ENERGY_PER_FLOP_J
     else:
-        flops = 0
-        compute_j_flops = 0
+        compute_flops_j = 0.0
 
-    # ===== Communication energy =====
-    download_mb = download_bytes / (1024 * 1024)
-    upload_mb = upload_bytes / (1024 * 1024)
+    d_mb = download_bytes / (1024 * 1024)
+    u_mb = upload_bytes / (1024 * 1024)
+    comm_j = net_j_per_mb * (d_mb + u_mb)
 
-    comm_j_download = net_j_per_mb * download_mb
-    comm_j_upload = net_j_per_mb * upload_mb
-    comm_j_total = comm_j_download + comm_j_upload
-
-    total_energy = compute_j_time + comm_j_total
+    total = compute_j + comm_j
 
     record = {
+        "dataset": dataset.lower(),
+        "mode": mode,
+        "variant": variant,
         "role": role,
         "round": round_id,
-
-        # compute energy
-        "compute_j_time": compute_j_time,
-        "compute_j_flops": compute_j_flops,
-
-        # communication energy
-        "download_bytes": download_bytes,
-        "upload_bytes": upload_bytes,
-        "download_mb": download_mb,
-        "upload_mb": upload_mb,
-        "comm_j_download": comm_j_download,
-        "comm_j_upload": comm_j_upload,
-        "comm_j_total": comm_j_total,
-
-        "FLOPs": flops,
-        "total_energy_j": total_energy,
+        "compute_j_time": compute_j,
+        "compute_j_flops": compute_flops_j,
+        "comm_j_total": comm_j,
+        "total_energy_j": total,
     }
 
-    log_event("client_energy.log", record)
+    _log_energy(role, record)
 
     print(
-        f"[{role}] Energy round {round_id}: "
-        f"compute_time={compute_j_time:.2f} J, "
-        f"compute_flops={compute_j_flops:.6f} J, "
-        f"comm_total={comm_j_total:.4f} J, "
-        f"total={total_energy:.4f} J"
+        f"[{role}] Energy r={round_id}: compute={compute_j:.4f} J, "
+        f"comm={comm_j:.4f} J, TOTAL={total:.4f} J"
     )
 
     return record

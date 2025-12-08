@@ -1,5 +1,5 @@
 """
-Allows running the FL server as a module:
+Run the FL server as a module:
 
     python -m src.fl.server
 """

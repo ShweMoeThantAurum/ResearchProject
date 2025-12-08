@@ -9,7 +9,12 @@ import torch
 
 
 def dp_add_noise(state_dict, sigma=0.05):
-    """Add Gaussian noise with standard deviation sigma to model parameters."""
+    """
+    Add Gaussian noise with standard deviation sigma to model parameters.
+
+    Each tensor in the state_dict receives independent noise sampled
+    from N(0, sigma²).
+    """
     noisy = {}
     for k, v in state_dict.items():
         noise = torch.randn_like(v) * sigma

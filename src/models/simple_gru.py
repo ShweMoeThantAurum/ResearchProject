@@ -26,7 +26,7 @@ class SimpleGRU(nn.Module):
         self.hidden_size = hidden_size
         self.seq_len = seq_len
 
-        # GRU encoder processes time sequences of node features
+        # GRU encoder processes temporal sequences of node features
         self.gru = nn.GRU(
             input_size=num_nodes,
             hidden_size=hidden_size,
@@ -39,7 +39,7 @@ class SimpleGRU(nn.Module):
     def forward(self, x):
         """Run GRU over the temporal sequence and predict future traffic values."""
         # x: [batch, seq_len, num_nodes]
-        out, _ = self.gru(x)        # out: [batch, seq_len, hidden_size]
-        final = out[:, -1, :]       # last timestep: [batch, hidden_size]
-        pred = self.fc(final)       # [batch, num_nodes]
+        out, _ = self.gru(x)  # [batch, seq_len, hidden_size]
+        final = out[:, -1, :]  # last timestep: [batch, hidden_size]
+        pred = self.fc(final)  # [batch, num_nodes]
         return pred

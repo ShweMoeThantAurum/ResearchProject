@@ -1,5 +1,5 @@
 """
-Allows running the FL client as a module:
+Run the FL client as a Python module:
 
     python -m src.fl.client
 """

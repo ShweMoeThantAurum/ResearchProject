@@ -8,6 +8,7 @@ signals, and creates federated client partitions mapped to IoT roles.
 import os
 import boto3
 import numpy as np
+
 from data.dataloader import build_client_datasets
 
 BUCKET = "aefl"
@@ -16,13 +17,13 @@ s3 = boto3.client("s3")
 
 
 def download_from_s3(raw_dir):
-    """Download PeMSD8 NPZ file if missing."""
+    """Download PeMSD8 NPZ file if it is missing."""
     os.makedirs(raw_dir, exist_ok=True)
     fname = "pems08.npz"
     local = os.path.join(raw_dir, fname)
 
     if not os.path.exists(local):
-        print(f"Downloading {fname}...")
+        print(f"Downloading {fname} from s3://{BUCKET}/{S3_PREFIX}{fname}...")
         s3.download_file(BUCKET, S3_PREFIX + fname, local)
     else:
         print(f"{fname} already exists locally.")
@@ -30,12 +31,14 @@ def download_from_s3(raw_dir):
     print("PeMSD8 raw data ready.")
 
 
-def preprocess_and_split(raw_dir="data/raw/pems08",
-                         out_dir="data/processed/pems08/prepared",
-                         num_clients=5,
-                         noniid=False,
-                         imbalance=0.4,
-                         seed=42):
+def preprocess_and_split(
+    raw_dir="data/raw/pems08",
+    out_dir="data/processed/pems08/prepared",
+    num_clients=5,
+    noniid=False,
+    imbalance=0.4,
+    seed=42,
+):
     """Create sliding-window sequences and federated partitions for PeMSD8."""
     download_from_s3(raw_dir)
     os.makedirs(out_dir, exist_ok=True)
@@ -46,26 +49,33 @@ def preprocess_and_split(raw_dir="data/raw/pems08",
     key = "data" if "data" in arr.files else arr.files[0]
     data = arr[key]
 
+    # Expected shapes: [T, N, C] or [N, T, C] or [T, N]
     if data.ndim == 3:
+        # Ensure time dimension is first
         if data.shape[0] < data.shape[1]:
             data = data.transpose(1, 0, 2)
-        data = data[..., 0]
+        data = data[..., 0]  # keep first channel
     elif data.ndim != 2:
-        raise ValueError(f"Unexpected shape {data.shape}")
+        raise ValueError(f"Unexpected PeMSD8 data shape: {data.shape}")
 
+    # Global standardisation
     data = (data - data.mean()) / data.std()
 
+    # Build sliding windows
     seq_len = 12
     X, y = [], []
 
     for i in range(len(data) - seq_len - 1):
-        X.append(data[i:i+seq_len])
-        y.append(data[i+seq_len])
+        X.append(data[i : i + seq_len])
+        y.append(data[i + seq_len])
 
-    X, y = np.array(X), np.array(y)
+    X = np.array(X)
+    y = np.array(y)
 
+    # Train/valid/test split
     n = len(X)
-    n_train, n_val = int(0.7*n), int(0.85*n)
+    n_train = int(0.7 * n)
+    n_val = int(0.85 * n)
 
     np.save(os.path.join(out_dir, "X_train.npy"), X[:n_train])
     np.save(os.path.join(out_dir, "y_train.npy"), y[:n_train])
@@ -74,6 +84,7 @@ def preprocess_and_split(raw_dir="data/raw/pems08",
     np.save(os.path.join(out_dir, "X_test.npy"), X[n_val:])
     np.save(os.path.join(out_dir, "y_test.npy"), y[n_val:])
 
+    # Build client partitions
     build_client_datasets(out_dir, num_clients, noniid, imbalance, seed)
 
     print("\nRenaming client partitions to IoT roles...")

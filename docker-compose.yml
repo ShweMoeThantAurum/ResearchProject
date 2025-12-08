@@ -1,6 +1,16 @@
 # Docker Compose configuration for AEFL federated learning clients.
-# Launches five roles: roadside, vehicle, sensor, camera, bus.
-# Dataset name is provided at runtime via: export DATASET=<name>.
+#
+# This file launches five logical IoT roles as separate containers:
+#   - roadside
+#   - vehicle
+#   - sensor
+#   - camera
+#   - bus
+#
+# The DATASET and FL_MODE variables are provided at runtime, e.g.:
+#   export DATASET=sz
+#   export FL_MODE=AEFL
+#   docker compose up -d
 
 x-common: &common
   build:
@@ -13,27 +23,34 @@ x-common: &common
 
   volumes:
     - .:/app
+    - ./run_logs:/app/run_logs
     - ~/.aws:/home/aefluser/.aws:ro
 
   environment: &common-env
     AWS_REGION: "us-east-1"
     S3_BUCKET: "aefl"
-    DATASET: "${DATASET}"
 
-    FL_MODE: "AEFL"
+    # Experiment configuration (must be exported by the caller)
+    DATASET: "${DATASET}"
+    FL_MODE: "${FL_MODE}"
+    VARIANT_ID: "${VARIANT_ID}"
+
+    # Federated learning hyperparameters
     FL_ROUNDS: 20
     BATCH_SIZE: 64
     LOCAL_EPOCHS: 1
     LR: 0.001
     HIDDEN_SIZE: 64
 
-    # default values (can be overridden)
+    # Device + network energy model (overridable)
     DEVICE_POWER_WATTS: 3.5
     NET_J_PER_MB: 0.6
 
+    # Differential privacy settings (overridable)
     DP_ENABLED: "false"
     DP_SIGMA: 0.01
 
+    # Compression settings (overridable)
     COMPRESSION_ENABLED: "false"
     COMPRESSION_MODE: "sparsify"
     COMPRESSION_SPARSITY: 0.5
@@ -47,7 +64,7 @@ services:
     environment:
       <<: *common-env
       CLIENT_ROLE: "roadside"
-      DEVICE_POWER_WATTS: 2.0 # low power roadside sensor
+      DEVICE_POWER_WATTS: 2.0 # low-power roadside sensor
     command: [ "python", "-u", "-m", "src.fl.client" ]
 
   client_vehicle:

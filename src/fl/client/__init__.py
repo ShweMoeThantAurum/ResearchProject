@@ -1,8 +1,8 @@
 """
-Client package initialiser for federated learning.
+Client package initializer for the federated learning pipeline.
 
-Exposes the main client entrypoint used by Docker containers
-during cloud-based FL execution.
+Exposes the main client entry point used by containerised client nodes
+during cloud-based federated learning experiments.
 """
 
 from .main import main

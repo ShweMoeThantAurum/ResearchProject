@@ -43,7 +43,12 @@ def r2_score(yhat, y):
 
 @torch.no_grad()
 def eval_loader_metrics(model, loader, device):
-    """Compute all metrics over a DataLoader using the current model."""
+    """
+    Compute all core metrics over a DataLoader using the current model.
+
+    Returns a tuple:
+      (MAE, RMSE, MAPE, sMAPE, R²)
+    """
     model.eval()
     all_mae, all_rmse, all_mape, all_smape, all_r2 = [], [], [], [], []
 
@@ -57,10 +62,12 @@ def eval_loader_metrics(model, loader, device):
         all_smape.append(smape(yhat, y))
         all_r2.append(r2_score(yhat, y))
 
+    n = max(1, len(all_mae))
+
     return (
-        sum(all_mae) / len(all_mae),
-        sum(all_rmse) / len(all_rmse),
-        sum(all_mape) / len(all_mape),
-        sum(all_smape) / len(all_smape),
-        sum(all_r2) / len(all_r2),
+        sum(all_mae) / n,
+        sum(all_rmse) / n,
+        sum(all_mape) / n,
+        sum(all_smape) / n,
+        sum(all_r2) / n,
     )

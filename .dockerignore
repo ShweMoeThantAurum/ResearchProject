@@ -1,18 +1,71 @@
-# Prevent huge build context
-data/
+# -----------------------------
+# PYTHON + EDITOR ARTIFACTS
+# -----------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# IDE files
+.vscode/
+.idea/
+*~
+
+
+# -----------------------------
+# LARGE DIRECTORIES (not needed in Docker)
+# -----------------------------
+# Model outputs / plots
 outputs/
 run_logs/
-__pycache__/
-*.pt
-*.log
-*.zip
-*.npz
-*.npy
 
-# Git & environments
-.git/
-.venv/
+# Large datasets
+data/raw/
+data/processed/
+
+# If you want the *processed* directory included, comment above lines
+
+
+# -----------------------------
+# AWS / CREDENTIALS
+# -----------------------------
+.aws/
 *.pem
-aws/
-*.cert
-*.key
+
+
+# -----------------------------
+# GIT / META
+# -----------------------------
+.git/
+.gitignore
+
+
+# -----------------------------
+# DOCKER BUILD CACHE
+# -----------------------------
+docker-compose.yml
+Dockerfile
+
+# -----------------------------
+# TEMP FILES
+# -----------------------------
+*.tmp
+*.log
+*.swp
+*.swo
+
+# Local scripts output
+accuracy_all_datasets.csv
+energy_all_datasets.csv
+privacy_tradeoff_*.csv
+

@@ -1,7 +1,8 @@
 """
-Cleanup utilities for removing stale temporary files created by past runs.
+Temporary-file cleanup utilities for client nodes.
 
-Ensures each federated learning round begins with a clean local state.
+Removes leftover cached model files to prevent interference between
+independent experiments.
 """
 
 import glob
@@ -10,24 +11,30 @@ from src.fl.logger import log_event
 
 
 def cleanup_local_tmp(role):
-    """Remove old cached global/update files for this client role."""
+    """
+    Remove temporary global/update model files for this client role.
+
+    Called once at startup before FL rounds begin.
+    """
     patterns = [
         f"/tmp/global_{role}_round_*.pt",
         f"/tmp/update_{role}_round_*.pt",
     ]
-    removed = 0
 
+    removed = 0
     for pattern in patterns:
         for path in glob.glob(pattern):
             try:
                 os.remove(path)
                 removed += 1
             except Exception:
-                pass
+                pass  # best-effort cleanup
 
-    log_event("client_cleanup.log", {"role": role, "removed_files": removed})
+    log_event("client_cleanup.log", {"role": role, "removed": removed})
 
-    if removed > 0:
-        print(f"[{role}] Cleaned up {removed} local tmp files.")
-    else:
-        print(f"[{role}] No local tmp files to clean.")
+    msg = (
+        f"[{role}] Cleaned {removed} tmp files."
+        if removed
+        else f"[{role}] No tmp files to clean."
+    )
+    print(msg)

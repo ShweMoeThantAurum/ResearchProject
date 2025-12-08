@@ -1,8 +1,10 @@
 """
 Server initialisation utilities.
 
-Handles cleaning the S3 directory, creating the initial global model,
-and uploading round-specific global models.
+Responsible for:
+ - cleaning the S3 directory for a fresh experiment,
+ - creating the initial global model,
+ - uploading round-specific global models.
 """
 
 import os
@@ -22,7 +24,12 @@ s3 = boto3.client("s3", region_name=AWS_REGION)
 
 
 def clear_round_data(prefix=PREFIX, bucket=BUCKET):
-    """Delete all S3 objects under the given prefix."""
+    """
+    Delete all S3 objects under the given prefix.
+
+    Used at the start of each experiment to clear previous
+    round data (global models, updates, metadata).
+    """
     paginator = s3.get_paginator("list_objects_v2")
     deleted = 0
     timer = Timer()
@@ -38,22 +45,37 @@ def clear_round_data(prefix=PREFIX, bucket=BUCKET):
     elapsed = timer.stop()
     print(f"[SERVER] Cleared {deleted} objects under {prefix} ({elapsed:.3f}s)")
 
-    log_event("server_cleanup.log", {
-        "prefix": prefix,
-        "deleted": deleted,
-        "time_sec": elapsed,
-    })
+    log_event(
+        "server_cleanup.log",
+        {
+            "prefix": prefix,
+            "deleted": deleted,
+            "time_sec": elapsed,
+        },
+    )
     return deleted
 
 
 def infer_num_nodes(proc_dir):
-    """Infer node count from the shape of X_train.npy."""
+    """
+    Infer number of nodes from the shape of X_train.npy.
+
+    Assumes:
+        X_train has shape (N, T, num_nodes)
+    """
     X = np.load(os.path.join(proc_dir, "X_train.npy"))
     return X.shape[-1]
 
 
 def init_global_model(num_nodes, hidden=None):
-    """Initialise the GRU model and return its state_dict."""
+    """
+    Initialise the GRU model and return its state_dict.
+
+    Args:
+        num_nodes (int): number of graph nodes (sensors).
+        hidden (int or None): GRU hidden size. If None, uses the
+            default from get_hidden_size().
+    """
     if hidden is None:
         hidden = get_hidden_size()
     print(f"[SERVER] num_nodes={num_nodes}, hidden={hidden}")
@@ -62,7 +84,11 @@ def init_global_model(num_nodes, hidden=None):
 
 
 def store_global_model(state_dict, round_id, prefix=PREFIX):
-    """Upload the global model state_dict for the given round."""
+    """
+    Upload the global model state_dict for the given round.
+
+    The model is first saved under /tmp and then uploaded to S3.
+    """
     key = f"{prefix}/round_{round_id}/global.pt"
     temp = f"/tmp/global_round_{round_id}.pt"
 
@@ -75,11 +101,17 @@ def store_global_model(state_dict, round_id, prefix=PREFIX):
 
     size_bytes = os.path.getsize(temp)
 
-    print(f"[SERVER] Uploaded global model r={round_id} ({size_bytes/1e6:.3f} MB, {latency:.3f}s)")
+    print(
+        f"[SERVER] Uploaded global model r={round_id} "
+        f"({size_bytes/1e6:.3f} MB, {latency:.3f}s)"
+    )
 
-    log_event("server_model_upload.log", {
-        "round": round_id,
-        "key": key,
-        "size_bytes": size_bytes,
-        "latency_sec": latency,
-    })
+    log_event(
+        "server_model_upload.log",
+        {
+            "round": round_id,
+            "key": key,
+            "size_bytes": size_bytes,
+            "latency_sec": latency,
+        },
+    )

@@ -1,9 +1,21 @@
 """
-Generate server-side CSV summaries and essential metrics only.
- - summary_<mode>.csv
- - final_metrics_<mode>.json
+Generate server-side CSV summaries and essential metrics.
 
-Everything is stored under: outputs/<dataset>/<mode>/
+Artifacts written to outputs/<dataset>/<mode>/ :
+
+ - summary_<mode>.csv
+     Per-round S3 latency and download size.
+
+ - final_metrics_<mode>.json
+     Final MAE / RMSE / MAPE plus configuration metadata.
+
+ - energy_summary.json (+ optional variant-specific files)
+     Aggregated client energy statistics.
+
+Variant-aware filenames:
+ - summary_<mode>_<variant>.csv
+ - final_metrics_<mode>_<variant>.json
+ - energy_summary_<variant>.json
 """
 
 import os
@@ -12,6 +24,7 @@ import boto3
 import pandas as pd
 
 from src.fl.logger import LOG_DIR
+from src.fl.server.energy import _load_energy_logs  # reuse same energy logs
 
 RESULTS_BUCKET = os.environ.get("RESULTS_BUCKET", "aefl")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
@@ -19,7 +32,11 @@ _s3 = boto3.client("s3", region_name=AWS_REGION)
 
 
 def _load_log_file(name):
-    """Load JSONL events from run_logs."""
+    """
+    Load JSONL events from run_logs/<name> into a list of dicts.
+
+    Returns an empty list if the file does not exist.
+    """
     path = os.path.join(LOG_DIR, name)
     if not os.path.exists(path):
         return []
@@ -32,14 +49,25 @@ def _load_log_file(name):
                 try:
                     entries.append(json.loads(line))
                 except Exception:
+                    # Skip malformed lines but don't crash
                     pass
     return entries
 
 
 def _build_round_dataframe(final_metrics, num_rounds):
-    """Build per-round latency + MB summary DataFrame."""
+    """
+    Build a per-round latency + MB summary DataFrame.
+
+    Columns:
+        dataset, mode, variant, round,
+        upload_latency_sec, download_latency_sec, download_mb
+    """
     uploads = _load_log_file("server_s3_upload.log")
     downloads = _load_log_file("server_s3_download.log")
+
+    dataset = os.environ.get("DATASET", "unknown").lower()
+    mode = os.environ.get("FL_MODE", "AEFL").strip().lower()
+    variant = os.environ.get("VARIANT_ID", "").strip()
 
     rows = []
     for r in range(1, num_rounds + 1):
@@ -48,24 +76,88 @@ def _build_round_dataframe(final_metrics, num_rounds):
 
         mean_up = sum(u.get("latency_sec", 0.0) for u in up) / max(len(up), 1)
         mean_dn = sum(d.get("latency_sec", 0.0) for d in dn) / max(len(dn), 1)
-        mean_mb = (
-            sum(d.get("size_bytes", 0.0) for d in dn) / max(len(dn), 1)
-        ) / (1024 * 1024)
+        mean_mb = (sum(d.get("size_bytes", 0.0) for d in dn) / max(len(dn), 1)) / (
+            1024 * 1024
+        )
 
-        rows.append({
-            "round": r,
-            "upload_latency_sec": mean_up,
-            "download_latency_sec": mean_dn,
-            "download_mb": mean_mb,
-        })
+        rows.append(
+            {
+                "dataset": dataset,
+                "mode": mode,
+                "variant": variant,
+                "round": r,
+                "upload_latency_sec": mean_up,
+                "download_latency_sec": mean_dn,
+                "download_mb": mean_mb,
+            }
+        )
 
     df = pd.DataFrame(rows)
     df.attrs["final_metrics"] = final_metrics
     return df
 
 
+def _build_energy_summary():
+    """
+    Aggregate energy logs into a per-dataset/mode(+variant) JSON record.
+
+    This uses the same per-round energy_<role>.jsonl logs as
+    src.fl.server.energy, ensuring that:
+      - baseline runs and DP runs are consistent;
+      - variant-specific files (energy_summary_<variant>.json)
+        contain correct non-zero energy totals.
+    """
+    dataset = os.environ.get("DATASET", "unknown").lower()
+    mode = os.environ.get("FL_MODE", "AEFL").strip().lower()
+    variant = os.environ.get("VARIANT_ID", "").strip()
+
+    entries = _load_energy_logs()
+
+    # Filter entries for this exact run configuration
+    filtered = [
+        e
+        for e in entries
+        if e.get("dataset", "").lower() == dataset
+        and str(e.get("mode", "")).strip().lower() == mode
+        and str(e.get("variant", "").strip()) == variant
+    ]
+
+    if not filtered:
+        # No energy information available for this run
+        return {
+            "dataset": dataset,
+            "mode": mode,
+            "variant": variant,
+            "total_energy_j": 0.0,
+            "per_role_energy_j": {},
+            "num_clients": 0,
+        }
+
+    # Aggregate per-role totals across all rounds
+    per_role = {}
+    for e in filtered:
+        role = e.get("role", "unknown")
+        per_role.setdefault(role, 0.0)
+        per_role[role] += float(e.get("total_energy_j", 0.0))
+
+    total_energy = sum(per_role.values())
+
+    return {
+        "dataset": dataset,
+        "mode": mode,
+        "variant": variant,
+        "total_energy_j": total_energy,
+        "per_role_energy_j": per_role,
+        "num_clients": len(per_role),
+    }
+
+
 def _upload_to_s3_dataset(local_path, dataset, mode):
-    """Upload summary artifacts to S3."""
+    """
+    Upload a local summary artifact to S3 under:
+
+        experiments/<dataset>/<mode>/<filename>
+    """
     if not os.path.exists(local_path):
         return
 
@@ -80,32 +172,108 @@ def _upload_to_s3_dataset(local_path, dataset, mode):
 
 def generate_cloud_summary(final_metrics, num_rounds, mode):
     """
-    Save ONLY the required artifacts:
-      - summary_<mode>.csv
-      - final_metrics_<mode>.json
+    Save the core summary artifacts for one experiment run.
+
+    Artifacts:
+        - summary_<mode>.csv (+ optional variant suffix)
+        - final_metrics_<mode>.json (+ optional variant suffix)
+        - energy_summary.json (+ optional variant-specific copy)
     """
     mode_lower = mode.lower()
     dataset = os.environ.get("DATASET", "unknown").lower()
+    variant = os.environ.get("VARIANT_ID", "").strip()
+    variant_suffix = f"_{variant}" if variant else ""
 
     out_dir = os.path.join("outputs", dataset, mode_lower)
     os.makedirs(out_dir, exist_ok=True)
 
-    # Summary CSV
-    df = _build_round_dataframe(final_metrics, num_rounds)
-    csv_path = os.path.join(out_dir, f"summary_{mode_lower}.csv")
-    df.to_csv(csv_path, index=False)
+    # Extended metrics including configuration metadata
+    dp_enabled = os.environ.get("DP_ENABLED", "false").lower() == "true"
+    dp_sigma = float(os.environ.get("DP_SIGMA", "0.0"))
+    compression_enabled = (
+        os.environ.get("COMPRESSION_ENABLED", "false").lower() == "true"
+    )
+    compression_mode = os.environ.get("COMPRESSION_MODE", "").lower()
+    compression_sparsity = float(os.environ.get("COMPRESSION_SPARSITY", "0.0"))
+    compression_k_frac = float(os.environ.get("COMPRESSION_K_FRAC", "0.0"))
 
+    metrics_with_meta = dict(final_metrics)
+    metrics_with_meta.update(
+        {
+            "dataset": dataset,
+            "mode": mode_lower,
+            "variant": variant,
+            "dp_enabled": dp_enabled,
+            "dp_sigma": dp_sigma,
+            "compression_enabled": compression_enabled,
+            "compression_mode": compression_mode,
+            "compression_sparsity": compression_sparsity,
+            "compression_k_frac": compression_k_frac,
+        }
+    )
+
+    # --------------------------
+    # Summary CSV (per-round)
+    # --------------------------
+    df = _build_round_dataframe(metrics_with_meta, num_rounds)
+    csv_base = os.path.join(out_dir, f"summary_{mode_lower}.csv")
+    df.to_csv(csv_base, index=False)
+
+    csv_variant = None
+    if variant:
+        csv_variant = os.path.join(out_dir, f"summary_{mode_lower}{variant_suffix}.csv")
+        df.to_csv(csv_variant, index=False)
+
+    # --------------------------
     # Final metrics JSON
-    metrics_path = os.path.join(out_dir, f"final_metrics_{mode_lower}.json")
-    with open(metrics_path, "w") as f:
-        json.dump(final_metrics, f, indent=4)
+    # --------------------------
+    metrics_base = os.path.join(out_dir, f"final_metrics_{mode_lower}.json")
+    with open(metrics_base, "w") as f:
+        json.dump(metrics_with_meta, f, indent=4)
+
+    metrics_variant = None
+    if variant:
+        metrics_variant = os.path.join(
+            out_dir, f"final_metrics_{mode_lower}{variant_suffix}.json"
+        )
+        with open(metrics_variant, "w") as f:
+            json.dump(metrics_with_meta, f, indent=4)
+
+    # --------------------------
+    # Energy summary JSON
+    # --------------------------
+    energy_summary = _build_energy_summary()
+    energy_base = os.path.join(out_dir, "energy_summary.json")
+    with open(energy_base, "w") as f:
+        json.dump(energy_summary, f, indent=4)
+
+    energy_variant = None
+    if variant:
+        energy_variant = os.path.join(out_dir, f"energy_summary{variant_suffix}.json")
+        with open(energy_variant, "w") as f:
+            json.dump(energy_summary, f, indent=4)
 
     print(f"[SERVER] Summary saved | dataset={dataset} | mode={mode}")
-    print(f"  {csv_path}")
-    print(f"  {metrics_path}")
+    print(f"  {csv_base}")
+    if csv_variant:
+        print(f"  {csv_variant}")
+    print(f"  {metrics_base}")
+    if metrics_variant:
+        print(f"  {metrics_variant}")
+    print(f"  {energy_base}")
+    if energy_variant:
+        print(f"  {energy_variant}")
 
-    # Upload only essentials
-    for path in [csv_path, metrics_path]:
+    # Upload only essentials (both base and variant if present)
+    upload_paths = [csv_base, metrics_base, energy_base]
+    if csv_variant:
+        upload_paths.append(csv_variant)
+    if metrics_variant:
+        upload_paths.append(metrics_variant)
+    if energy_variant:
+        upload_paths.append(energy_variant)
+
+    for path in upload_paths:
         _upload_to_s3_dataset(path, dataset, mode)
 
     return df

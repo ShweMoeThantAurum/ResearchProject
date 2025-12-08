@@ -1,7 +1,8 @@
 """
 Server package initializer for the federated learning pipeline.
 
-Exposes the main server entrypoint used for cloud-based FL orchestration.
+This package exposes the main server entry point used to orchestrate
+cloud-based federated learning experiments.
 """
 
 from .main import main

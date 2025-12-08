@@ -1,15 +1,15 @@
 """
-Client-side S3 communication utilities.
+Client-side S3 I/O utilities.
 
-Handles downloading global models, uploading processed updates,
-and writing metadata to the correct S3 keys for each round.
+Handles:
+ - downloading global models from the server
+ - uploading processed updates
+ - uploading metadata per round
 """
 
 import os
 import json
 import time
-from typing import Tuple
-
 import boto3
 import torch
 
@@ -19,157 +19,111 @@ from src.fl.utils import get_bucket, get_prefix
 
 BUCKET = get_bucket()
 PREFIX = get_prefix()
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-s3 = boto3.client("s3", region_name=AWS_REGION)
+s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 
 
-# ---------------------------------------------------------------------
-# Key helpers
-# ---------------------------------------------------------------------
-def global_key(round_id):
-    """S3 key for the global model of a given round."""
-    return f"{PREFIX}/round_{round_id}/global.pt"
+def global_key(r):
+    return f"{PREFIX}/round_{r}/global.pt"
 
 
-def raw_update_key(round_id, role):
-    """Key for raw updates (if Lambda offload were enabled)."""
-    return f"{PREFIX}/round_{round_id}/raw_updates/{role}.pt"
+def processed_update_key(r, role):
+    return f"{PREFIX}/round_{r}/updates/{role}.pt"
 
 
-def processed_update_key(round_id, role):
-    """Key for final processed (DP/compressed) updates."""
-    return f"{PREFIX}/round_{round_id}/updates/{role}.pt"
+def metadata_key(r, role):
+    return f"{PREFIX}/round_{r}/metadata/{role}.json"
 
 
-def metadata_key(round_id, role):
-    """Key for client metadata JSON."""
-    return f"{PREFIX}/round_{round_id}/metadata/{role}.json"
-
-
-# ---------------------------------------------------------------------
-# Download global model
-# ---------------------------------------------------------------------
 def download_global(round_id, role):
-    """Block until the server uploads the global model for this round."""
+    """
+    Block until global model for this round is available.
+    """
     key = global_key(round_id)
-    local_path = f"/tmp/global_{role}_round_{round_id}.pt"
+    local = f"/tmp/global_{role}_round_{round_id}.pt"
+
+    dataset = os.environ.get("DATASET", "unknown")
+    mode = os.environ.get("FL_MODE", "AEFL").lower()
+    variant = os.environ.get("VARIANT_ID", "")
 
     while True:
         timer = Timer()
         timer.start()
         try:
-            s3.download_file(BUCKET, key, local_path)
+            s3.download_file(BUCKET, key, local)
             latency = timer.stop()
-            size_bytes = os.path.getsize(local_path)
+            size = os.path.getsize(local)
 
-            log_event("client_s3_download.log", {
-                "role": role,
-                "round": round_id,
-                "latency_sec": latency,
-                "size_bytes": size_bytes,
-                "s3_key": key,
-            })
+            log_event(
+                "client_s3_download.log",
+                {
+                    "role": role,
+                    "round": round_id,
+                    "dataset": dataset,
+                    "mode": mode,
+                    "variant": variant,
+                    "latency_sec": latency,
+                    "size_bytes": size,
+                    "s3_key": key,
+                },
+            )
 
             print(
-                f"[{role}] Downloaded global model for round {round_id} "
-                f"(size={size_bytes / (1024**2):.3f} MB, latency={latency:.3f}s)"
+                f"[{role}] Downloaded global r={round_id} "
+                f"({size/1e6:.3f} MB, {latency:.3f}s)"
             )
-            return local_path, size_bytes
+            return local, size
 
         except Exception:
-            print(f"[{role}] Waiting for global model round {round_id}...")
-            time.sleep(3.0)
+            print(f"[{role}] Waiting for global r={round_id}...")
+            time.sleep(3)
 
 
-# ---------------------------------------------------------------------
-# Upload RAW update (unused in your pipeline)
-# ---------------------------------------------------------------------
-def upload_raw_update(round_id, role, state_dict):
-    """Upload unprocessed raw update (Lambda mode only; unused here)."""
-    local_path = f"/tmp/raw_update_{role}_round_{round_id}.pt"
-    torch.save(state_dict, local_path)
-
-    key = raw_update_key(round_id, role)
-
-    timer = Timer()
-    timer.start()
-    s3.upload_file(local_path, BUCKET, key)
-    latency = timer.stop()
-
-    size_bytes = os.path.getsize(local_path)
-
-    log_event("client_raw_upload.log", {
-        "role": role,
-        "round": round_id,
-        "latency_sec": latency,
-        "size_bytes": size_bytes,
-        "s3_key": key,
-    })
-
-    print(
-        f"[{role}] Uploaded RAW update for round {round_id} "
-        f"(size={size_bytes / (1024**2):.3f} MB, latency={latency:.3f}s)"
-    )
-
-    return size_bytes, latency
-
-
-# ---------------------------------------------------------------------
-# Upload processed update
-# ---------------------------------------------------------------------
 def upload_processed_update(round_id, role, state_dict):
-    """Upload the compressed/DP-processed update for this round."""
-    local_path = f"/tmp/update_{role}_round_{round_id}.pt"
-    torch.save(state_dict, local_path)
+    """
+    Upload processed update (DP/Compression applied).
+    """
+    local = f"/tmp/update_{role}_round_{round_id}.pt"
+    torch.save(state_dict, local)
 
     key = processed_update_key(round_id, role)
-
     timer = Timer()
     timer.start()
-    s3.upload_file(local_path, BUCKET, key)
+    s3.upload_file(local, BUCKET, key)
     latency = timer.stop()
 
-    size_bytes = os.path.getsize(local_path)
+    size = os.path.getsize(local)
 
-    log_event("client_s3_upload.log", {
-        "role": role,
-        "round": round_id,
-        "latency_sec": latency,
-        "size_bytes": size_bytes,
-        "s3_key": key,
-    })
-
-    print(
-        f"[{role}] Uploaded PROCESSED update for round {round_id} "
-        f"(size={size_bytes / (1024**2):.3f} MB, latency={latency:.3f}s)"
+    log_event(
+        "client_s3_upload.log",
+        {
+            "role": role,
+            "round": round_id,
+            "size_bytes": size,
+            "latency_sec": latency,
+            "s3_key": key,
+        },
     )
 
-    return size_bytes, latency
+    print(
+        f"[{role}] Uploaded update r={round_id} " f"({size/1e6:.3f} MB, {latency:.3f}s)"
+    )
+    return size, latency
 
 
-# ---------------------------------------------------------------------
-# Upload metadata
-# ---------------------------------------------------------------------
 def upload_metadata(round_id, role, meta):
-    """Upload metadata JSON containing energy, communication and training stats."""
+    """
+    Upload JSON metadata for this round.
+    """
     key = metadata_key(round_id, role)
-    body = json.dumps(meta).encode("utf-8")
+    body = json.dumps(meta).encode()
 
     timer = Timer()
     timer.start()
     s3.put_object(Bucket=BUCKET, Key=key, Body=body)
     latency = timer.stop()
 
-    log_event("client_meta_upload.log", {
-        "role": role,
-        "round": round_id,
-        "latency_sec": latency,
-        "size_bytes": len(body),
-        "s3_key": key,
-    })
-
     print(
-        f"[{role}] Uploaded metadata for round {round_id}: "
+        f"[{role}] Uploaded metadata r={round_id}: "
         f"bandwidth={meta.get('bandwidth_mbps', 0):.3f} Mb/s, "
-        f"total_energy={meta.get('total_energy_j', 0):.2f} J"
+        f"energy={meta.get('total_energy_j', 0):.2f} J"
     )

@@ -16,47 +16,73 @@ def load_prepared_data(proc_dir):
         yp = os.path.join(proc_dir, f"y_{split}.npy")
         if not os.path.exists(Xp) or not os.path.exists(yp):
             raise FileNotFoundError(f"Missing {split} arrays in {proc_dir}")
-        data[f"X_{split}"], data[f"y_{split}"] = np.load(Xp), np.load(yp)
+        data[f"X_{split}"] = np.load(Xp)
+        data[f"y_{split}"] = np.load(yp)
     return data
 
 
-def split_clients_by_nodes(num_nodes, num_clients, noniid=False, imbalance_factor=0.4, seed=42):
-    """Split node indices among clients (IID or Non-IID using Dirichlet sampling)."""
+def split_clients_by_nodes(
+    num_nodes, num_clients, noniid=False, imbalance_factor=0.4, seed=42
+):
+    """
+    Split node indices among clients (IID or Non-IID via Dirichlet sampling).
+
+    Returns a list of index arrays, one per client.
+    """
     rng = np.random.default_rng(seed)
     all_nodes = np.arange(num_nodes)
 
     if not noniid:
+        # Simple uniform split of nodes
         return np.array_split(all_nodes, num_clients)
 
+    # Dirichlet-based non-IID allocation over nodes
     shares = rng.dirichlet(np.ones(num_clients))
     sizes = np.maximum(1, (shares * num_nodes).astype(int))
 
+    # Adjust to ensure total coverage of nodes
     diff = num_nodes - sizes.sum()
     sizes[-1] += diff
 
     rng.shuffle(all_nodes)
 
-    splits, start = [], 0
+    splits = []
+    start = 0
     for s in sizes:
-        splits.append(all_nodes[start:start + s])
+        splits.append(all_nodes[start : start + s])
         start += s
 
     return splits
 
 
-def build_client_datasets(proc_dir, num_clients=5, noniid=False,
-                          imbalance_factor=0.4, seed=42, save_dir=None):
+def build_client_datasets(
+    proc_dir,
+    num_clients=5,
+    noniid=False,
+    imbalance_factor=0.4,
+    seed=42,
+    save_dir=None,
+):
     """
     Generate client-partitioned datasets under:
-        <proc_dir>/clients/client_<role>_X.npy
-        <proc_dir>/clients/client_<role>_y.npy
+        <proc_dir>/clients/client<i>_X.npy
+        <proc_dir>/clients/client<i>_y.npy
+
+    Partitions nodes across clients and saves corresponding slices of
+    the training tensors.
     """
-    print(f"Building client datasets | Non-IID={noniid} | imbalance={imbalance_factor}")
+    print(
+        f"Building client datasets | Non-IID={noniid} | "
+        f"imbalance={imbalance_factor}"
+    )
+
     data = load_prepared_data(proc_dir)
     Xtr, ytr = data["X_train"], data["y_train"]
     num_nodes = Xtr.shape[-1]
 
-    splits = split_clients_by_nodes(num_nodes, num_clients, noniid, imbalance_factor, seed)
+    splits = split_clients_by_nodes(
+        num_nodes, num_clients, noniid, imbalance_factor, seed
+    )
 
     out_dir = save_dir or os.path.join(proc_dir, "clients")
     os.makedirs(out_dir, exist_ok=True)
@@ -83,7 +109,8 @@ def build_client_datasets(proc_dir, num_clients=5, noniid=False,
 
 if __name__ == "__main__":
     import argparse
-    p = argparse.ArgumentParser(description="Split dataset for FL")
+
+    p = argparse.ArgumentParser(description="Split dataset into FL clients")
     p.add_argument("--proc_dir", type=str, default="data/processed/sz/prepared")
     p.add_argument("--clients", type=int, default=5)
     p.add_argument("--noniid", action="store_true")
@@ -92,6 +119,9 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     build_client_datasets(
-        args.proc_dir, args.clients,
-        args.noniid, args.imbalance, args.seed
+        args.proc_dir,
+        args.clients,
+        args.noniid,
+        args.imbalance,
+        args.seed,
     )

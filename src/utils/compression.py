@@ -1,8 +1,12 @@
 """
 Model compression utilities for communication-efficient FL.
 
-Implements sparsification, top-k selection, and 8-bit quantisation
-along with helper functions for estimating payload size in bytes.
+Implements:
+- magnitude-based sparsification
+- top-k selection
+- 8-bit per-tensor symmetric quantisation
+
+Also provides helper functions for estimating payload size in bytes.
 """
 
 import math
@@ -12,9 +16,20 @@ import torch
 # -------------------------------
 # Magnitude pruning
 # -------------------------------
+
+
 def sparsify_state(state_dict, sparsity=0.5):
-    """Zero smallest-magnitude weights to reach the given sparsity level."""
-    all_vals = torch.cat([v.flatten().abs() for v in state_dict.values() if v.is_floating_point()])
+    """
+    Zero smallest-magnitude weights to reach the given sparsity level.
+
+    Returns:
+      compressed_state : same shapes, more zeros
+      kept_ratio       : fraction of non-zero parameters
+      payload_bytes    : estimated dense payload size (no index saving)
+    """
+    all_vals = torch.cat(
+        [v.flatten().abs() for v in state_dict.values() if v.is_floating_point()]
+    )
     k = int(len(all_vals) * sparsity)
     if k <= 0:
         return state_dict, 1.0, dense_state_size_bytes(state_dict)
@@ -22,7 +37,8 @@ def sparsify_state(state_dict, sparsity=0.5):
     # Determine magnitude threshold for pruning
     threshold = torch.topk(all_vals, k, largest=False).values.max().item()
     compressed = {}
-    kept_total = total = 0
+    kept_total = 0
+    total = 0
 
     for name, v in state_dict.items():
         if not v.is_floating_point():
@@ -35,15 +51,18 @@ def sparsify_state(state_dict, sparsity=0.5):
         total += mask.numel()
 
     kept_ratio = kept_total / max(1, total)
-    # Dense payload: keeps tensor shape but increases sparsity
+
+    # Dense payload: tensor shapes unchanged, but many entries zeroed
     return compressed, kept_ratio, dense_state_size_bytes(compressed)
 
 
 # -------------------------------
 # Size utilities
 # -------------------------------
+
+
 def dense_state_size_bytes(state_dict):
-    """Estimate dense float32 payload size in bytes."""
+    """Estimate dense float32 payload size in bytes for a state_dict."""
     total = 0
     for v in state_dict.values():
         if isinstance(v, torch.Tensor):
@@ -64,9 +83,11 @@ def _int_index_bytes(numel, ndim):
 # -------------------------------
 # Top-k sparsification
 # -------------------------------
+
+
 def topk_compress_state(state_dict, k_frac=0.1):
     """
-    Apply per-tensor Top-k sparsification.
+    Apply per-tensor top-k sparsification by magnitude.
 
     Returns:
       decomp_state : dense tensors with zeros for dropped entries
@@ -75,7 +96,8 @@ def topk_compress_state(state_dict, k_frac=0.1):
     """
     assert 0.0 < k_frac <= 1.0, "k_frac must be in (0, 1]"
     decomp = {}
-    total = kept = 0
+    total = 0
+    kept = 0
     payload_bytes = 0
 
     for name, t in state_dict.items():
@@ -91,6 +113,7 @@ def topk_compress_state(state_dict, k_frac=0.1):
 
         # Top-k by magnitude
         vals, idxs = torch.topk(flat.abs(), k, largest=True, sorted=False)
+
         # Recover signed values
         signs = torch.sign(flat[idxs])
         top_vals = vals * signs
@@ -111,8 +134,10 @@ def topk_compress_state(state_dict, k_frac=0.1):
 
 
 # -------------------------------
-# 8-bit per-tensor symmetric quantization
+# 8-bit per-tensor symmetric quantisation
 # -------------------------------
+
+
 def quantize8_state(state_dict):
     """
     Apply per-tensor symmetric int8 quantisation.
