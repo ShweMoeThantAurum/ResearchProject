@@ -13,7 +13,7 @@ This repo includes:
 
 ---
 
-## 🔧 Features
+## Features
 
 * **Federated Learning Modes**
 
@@ -63,7 +63,7 @@ docker/                  # Docker configs for clients
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### 1. Install dependencies
 
@@ -103,7 +103,7 @@ outputs/<dataset>/<mode>/
 
 ---
 
-## 📊 Example Outputs
+## Example Outputs
 
 * Energy across FL modes
 * Accuracy (MAE/RMSE/MAPE)
@@ -114,7 +114,7 @@ Plots are automatically generated and saved in `outputs/`.
 
 ---
 
-## 🧪 Supported Datasets
+## Supported Datasets
 
 * `Los-Loop`
 * `PeMSD8`
